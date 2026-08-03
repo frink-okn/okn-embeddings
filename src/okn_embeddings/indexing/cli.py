@@ -10,6 +10,7 @@ from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
 from .embed import embed_file
+from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
@@ -114,6 +115,17 @@ def textify(
         bool,
         typer.Option("--progress", help="Show a progress bar."),
     ] = False,
+    manifest: Annotated[
+        bool,
+        typer.Option(
+            "--manifest/--no-manifest",
+            help=(
+                "Also write a provenance manifest (<output stem>.meta.json) "
+                "beside the output, recording the graph, config, and run "
+                "bounds that produced it."
+            ),
+        ),
+    ] = False,
 ):
     if text and jsonl:
         raise typer.BadParameter("--text and --jsonl cannot be used together")
@@ -154,6 +166,19 @@ def textify(
         )
 
     typer.echo(f"Wrote {count} records to {output}")
+
+    if manifest:
+        data = build_manifest(
+            hdt_file,
+            config_toml,
+            config,
+            target=target,
+            limit=limit,
+            max_iris_per_record=max_iris_per_record,
+            record_count=count,
+        )
+        write_manifest(manifest_path(output), data)
+        typer.echo(f"Wrote manifest to {manifest_path(output)}")
 
 
 @app.command("sample-types")

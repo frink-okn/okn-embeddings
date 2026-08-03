@@ -12,6 +12,7 @@ Row order is input order, which `textify` already makes deterministic, so a
 row's ordinal is a stable key for index artifacts built over this file.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from ..core.embedding import Embedder
+from .manifest import read_manifest
 from .records import chunks, count_jsonl, iter_jsonl
 
 METADATA_PREFIX = "okn-embeddings."
@@ -35,6 +37,15 @@ METADATA_KEYS = (
     "metric",  # distance the model is trained for; the query side uses this
     "normalized",  # "true" when every stored vector is unit-length
     "record_count",
+)
+
+# When a textify provenance manifest sits beside the input records, these are
+# also stamped (prefixed): the full manifest JSON plus the two hashes pulled
+# out for cheap comparison across artifacts.
+MANIFEST_METADATA_KEYS = (
+    "textify_manifest",
+    "config_sha256",
+    "graph_sha256",
 )
 
 # Vectors whose L2 norms all sit within this tolerance of 1.0 are recorded as
@@ -108,6 +119,27 @@ def rows_to_table(
     )
 
 
+def manifest_metadata(records_path: Path) -> dict[str, str]:
+    """Metadata entries from the manifest beside the records file, if any."""
+    manifest = read_manifest(records_path)
+    if manifest is None:
+        return {}
+
+    entries = {
+        METADATA_PREFIX
+        + "textify_manifest": json.dumps(
+            manifest, ensure_ascii=False, separators=(",", ":")
+        )
+    }
+    config_sha = (manifest.get("config") or {}).get("sha256")
+    if config_sha:
+        entries[METADATA_PREFIX + "config_sha256"] = config_sha
+    graph_sha = (manifest.get("graph") or {}).get("sha256")
+    if graph_sha:
+        entries[METADATA_PREFIX + "graph_sha256"] = graph_sha
+    return entries
+
+
 def embed_file(
     embedder: Embedder,
     path: Path,
@@ -166,17 +198,17 @@ def embed_file(
         flush()
 
         normalized = max_norm_deviation <= NORMALIZED_TOLERANCE
-        writer.add_key_value_metadata(
-            {
-                METADATA_PREFIX + "format": "1",
-                METADATA_PREFIX + "graph": graph,
-                METADATA_PREFIX + "model": model_name,
-                METADATA_PREFIX + "dim": str(dim),
-                METADATA_PREFIX + "metric": "cosine",
-                METADATA_PREFIX + "normalized": str(normalized).lower(),
-                METADATA_PREFIX + "record_count": str(count),
-            }
-        )
+        metadata = {
+            METADATA_PREFIX + "format": "1",
+            METADATA_PREFIX + "graph": graph,
+            METADATA_PREFIX + "model": model_name,
+            METADATA_PREFIX + "dim": str(dim),
+            METADATA_PREFIX + "metric": "cosine",
+            METADATA_PREFIX + "normalized": str(normalized).lower(),
+            METADATA_PREFIX + "record_count": str(count),
+        }
+        metadata.update(manifest_metadata(path))
+        writer.add_key_value_metadata(metadata)
 
     progress.close()
     return count
