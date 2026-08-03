@@ -9,6 +9,7 @@ from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
+from .embed import embed_file
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
@@ -267,6 +268,86 @@ def sample_targets_cmd(
         write_sample_targets_json(records, output)
 
     typer.echo(f"Wrote {len(records)} target samples to {output}")
+
+
+@app.command()
+def embed(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "JSONL embedding-record files to embed. Each file is one "
+                "graph, named by its stem (e.g. my-graph.jsonl -> my-graph)."
+            ),
+        ),
+    ],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            "-o",
+            help=(
+                "Directory for the output Parquet files (default: next to "
+                "each input)."
+            ),
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Number of records to embed at once.",
+        ),
+    ] = 256,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Maximum records to embed per input file.",
+        ),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a per-graph record progress bar.",
+        ),
+    ] = True,
+):
+    """Embed materialized JSONL records into self-described Parquet files.
+
+    Writes one `<graph>.parquet` per input: the record fields plus a `vector`
+    column, with the model identity in the file metadata. Downstream steps
+    (Qdrant upload, ANN index builds) consume this artifact instead of
+    re-embedding.
+    """
+    settings = load_settings()
+    # Deliberately not AppContext.from_env(): embedding needs no Qdrant
+    # connection, only the model.
+    embedder = make_embedder(settings)
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        output = (output_dir or path.parent) / f"{path.stem}.parquet"
+        try:
+            count = embed_file(
+                embedder,
+                path,
+                output,
+                model_name=settings.model_name,
+                batch_size=batch_size,
+                limit=limit,
+                progress_enabled=progress,
+            )
+        except ValueError as e:
+            _fail(str(e))
+        typer.echo(f"Wrote {count} records to {output}")
 
 
 @app.command()
