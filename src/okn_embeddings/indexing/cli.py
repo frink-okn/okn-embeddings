@@ -9,6 +9,7 @@ from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
+from .ann import VECTOR_DTYPES, build_index
 from .embed import embed_file
 from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
@@ -373,6 +374,97 @@ def embed(
         except ValueError as e:
             _fail(str(e))
         typer.echo(f"Wrote {count} records to {output}")
+
+
+@app.command("build-index")
+def build_index_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to index. Each gets a usearch index "
+                "(<stem>.usearch) and a manifest (<stem>.usearch.meta.json) "
+                "written beside it."
+            ),
+        ),
+    ],
+    dtype: Annotated[
+        str,
+        typer.Option(
+            "--dtype",
+            help=(
+                "usearch storage type: f32 keeps full precision; f16 and i8 "
+                "quantize on ingest for a smaller index."
+            ),
+        ),
+    ] = "f32",
+    connectivity: Annotated[
+        int | None,
+        typer.Option(
+            "--connectivity",
+            min=2,
+            help="HNSW connectivity (m). usearch's default if unset.",
+        ),
+    ] = None,
+    expansion_add: Annotated[
+        int | None,
+        typer.Option(
+            "--expansion-add",
+            min=1,
+            help=(
+                "HNSW build-time beam width (ef_construction). usearch's "
+                "default if unset."
+            ),
+        ),
+    ] = None,
+    expansion_search: Annotated[
+        int | None,
+        typer.Option(
+            "--expansion-search",
+            min=1,
+            help=(
+                "Default query-time beam width (ef_search) stored in the "
+                "index; also overridable at query time. usearch's default "
+                "if unset."
+            ),
+        ),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a per-file vector progress bar.",
+        ),
+    ] = True,
+):
+    """Build a usearch ANN index beside each embed Parquet artifact.
+
+    The index keys are Parquet row ordinals, so a search hit resolves to its
+    record by reading that row of the Parquet file. The manifest records the
+    build parameters and the parent file's sha256; the index is rebuildable
+    from the Parquet at any time, with different parameters if needed.
+    """
+    if dtype not in VECTOR_DTYPES:
+        raise typer.BadParameter(
+            f"dtype must be one of {', '.join(VECTOR_DTYPES)}"
+        )
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            index_file, manifest_file, count = build_index(
+                path,
+                dtype=dtype,
+                connectivity=connectivity,
+                expansion_add=expansion_add,
+                expansion_search=expansion_search,
+                progress_enabled=progress,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+        typer.echo(f"Indexed {count} vectors into {index_file}")
+        typer.echo(f"Wrote manifest to {manifest_file}")
 
 
 @app.command()

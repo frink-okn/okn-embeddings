@@ -33,6 +33,13 @@ def file_sha256(path: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+def package_version(name: str) -> str | None:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
 def build_manifest(
     hdt_file: Path,
     config_file: Path,
@@ -48,14 +55,12 @@ def build_manifest(
     Deliberately carries no timestamp, so identical inputs produce an
     identical manifest.
     """
-    try:
-        version = importlib_metadata.version("okn-embeddings")
-    except importlib_metadata.PackageNotFoundError:
-        version = None
-
     return {
         "format": MANIFEST_FORMAT,
-        "tool": {"name": "okn-embeddings", "version": version},
+        "tool": {
+            "name": "okn-embeddings",
+            "version": package_version("okn-embeddings"),
+        },
         "graph": {
             "file": hdt_file.name,
             "bytes": hdt_file.stat().st_size,

@@ -25,6 +25,7 @@ dependencies = [
     "rdflib-hdt>=3.2",
     "tqdm>=4.67.3",
     "typer>=0.21.1",
+    "usearch>=2.26.0",
 ]
 
 [project.scripts]
