@@ -201,6 +201,16 @@ def local(
         bool,
         typer.Option("--exact", help="Exact (kNN) search instead of ANN."),
     ] = False,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help=(
+                "Hash each Parquet file and check it against its index "
+                "manifest before searching (slow on large files)."
+            ),
+        ),
+    ] = False,
     show_repr: Annotated[
         bool,
         typer.Option(
@@ -224,7 +234,7 @@ def local(
         if not path.exists():
             _fail(f"Input file not found: {path}")
         try:
-            stores.append(SidecarStore.open(path))
+            stores.append(SidecarStore.open(path, verify=verify))
         except ValueError as e:
             _fail(str(e))
 

@@ -6,6 +6,8 @@ from okn_embeddings.ann.build import build_index, index_manifest_path
 from okn_embeddings.ann.sidecar import SidecarStore
 from okn_embeddings.indexing.embed import (
     METADATA_PREFIX,
+    PARQUET_COMPRESSION,
+    PARQUET_DICTIONARY_COLUMNS,
     rows_to_table,
     vector_schema,
 )
@@ -27,7 +29,7 @@ _VECTORS = [
 ]
 
 
-def _write_parquet(path, vectors, metadata_overrides=None):
+def _write_parquet(path, vectors, row_groups=1, metadata_overrides=None):
     schema = vector_schema(_DIM)
     rows = [
         ([f"urn:{i}", f"urn:{i}-alias"], 2, f"L{i}", f"text {i}")
@@ -43,8 +45,21 @@ def _write_parquet(path, vectors, metadata_overrides=None):
         METADATA_PREFIX + "record_count": str(len(vectors)),
     }
     metadata.update(metadata_overrides or {})
-    with pq.ParquetWriter(path, schema) as writer:
-        writer.write_table(rows_to_table(schema, rows, list(vectors)))
+    per_group = -(-len(vectors) // row_groups)
+    with pq.ParquetWriter(
+        path,
+        schema,
+        compression=PARQUET_COMPRESSION,
+        use_dictionary=PARQUET_DICTIONARY_COLUMNS,
+    ) as writer:
+        for start in range(0, len(vectors), per_group):
+            writer.write_table(
+                rows_to_table(
+                    schema,
+                    rows[start : start + per_group],
+                    list(vectors[start : start + per_group]),
+                )
+            )
         writer.add_key_value_metadata(metadata)
 
 
@@ -68,22 +83,50 @@ def test_flat_search_without_index(tmp_path):
     assert rows[0].iri_count == 2
     assert rows[0].repr == "text 2"
     assert rows[0].graph == "test-graph"
-    # Best-first ordering.
     scores = [r.score for r in rows]
     assert scores == sorted(scores, reverse=True)
 
 
-def test_ann_search_with_index(tmp_path):
+def test_open_reads_nothing_and_ann_search_touches_no_vectors(tmp_path):
     parquet = tmp_path / "g.parquet"
     _write_parquet(parquet, _VECTORS)
     build_index(parquet)
 
     store = SidecarStore.open(parquet)
+    assert store._vector_parts is None
+    assert store._group_cache == {}
 
-    assert store.has_index
     rows = store.search(_VECTORS[1], 2)
     assert rows[0].id == "test-graph:1"
     assert rows[0].score == pytest.approx(1.0, abs=1e-3)
+    # The ANN path resolved its hits without materializing vectors.
+    assert store._vector_parts is None
+    assert store._group_cache
+
+
+def test_flat_scan_spans_row_groups(tmp_path):
+    parquet = tmp_path / "g.parquet"
+    _write_parquet(parquet, _VECTORS, row_groups=3)
+    assert pq.ParquetFile(parquet).metadata.num_row_groups > 1
+
+    store = SidecarStore.open(parquet)
+    rows = store.search(_VECTORS[4], 1)
+
+    # A hit in the last row group resolves to the right global record.
+    assert rows[0].id == "test-graph:4"
+    assert rows[0].label == "L4"
+    assert len(store.vector_parts) > 1
+
+
+def test_vector_parts_are_zero_copy_views(tmp_path):
+    parquet = tmp_path / "g.parquet"
+    _write_parquet(parquet, _VECTORS, row_groups=2)
+
+    store = SidecarStore.open(parquet)
+
+    for part in store.vector_parts:
+        # A view over the mapped file owns no data.
+        assert part.base is not None
 
 
 def test_exact_flag_forces_flat_scan(tmp_path):
@@ -111,15 +154,38 @@ def test_use_index_false_skips_the_index(tmp_path):
     assert store.search(_VECTORS[3], 1)[0].id == "test-graph:3"
 
 
-def test_stale_index_is_rejected(tmp_path):
+def test_row_count_mismatch_is_always_rejected(tmp_path):
     parquet = tmp_path / "g.parquet"
     _write_parquet(parquet, _VECTORS)
     build_index(parquet)
-    # Regenerate the parquet with different vectors; the index is now stale.
+    _write_parquet(parquet, _VECTORS[:3])
+
+    with pytest.raises(ValueError, match="rebuild"):
+        SidecarStore.open(parquet)
+
+
+def test_content_swap_needs_verify_to_be_caught(tmp_path):
+    parquet = tmp_path / "g.parquet"
+    _write_parquet(parquet, _VECTORS)
+    build_index(parquet)
+    # Same schema, same row count, same size -- only the content differs.
     _write_parquet(parquet, list(reversed(_VECTORS)))
+    if parquet.stat().st_size != _load_parent_bytes(parquet):
+        pytest.skip("rewrite changed the file size; covered by size check")
+
+    SidecarStore.open(parquet)  # cheap checks cannot see it
 
     with pytest.raises(ValueError, match="sha256 mismatch"):
-        SidecarStore.open(parquet)
+        SidecarStore.open(parquet, verify=True)
+
+
+def _load_parent_bytes(parquet):
+    import json
+
+    from okn_embeddings.ann.build import index_path_for
+
+    manifest = index_manifest_path(index_path_for(parquet))
+    return json.loads(manifest.read_text(encoding="utf-8"))["parent"]["bytes"]
 
 
 def test_index_without_manifest_is_rejected(tmp_path):
@@ -158,7 +224,7 @@ def test_k_larger_than_count_returns_all_rows(tmp_path):
 
 def test_vector_for_iri(tmp_path):
     parquet = tmp_path / "g.parquet"
-    _write_parquet(parquet, _VECTORS)
+    _write_parquet(parquet, _VECTORS, row_groups=2)
 
     store = SidecarStore.open(parquet)
 
@@ -166,3 +232,14 @@ def test_vector_for_iri(tmp_path):
     assert vector is not None
     assert np.allclose(vector, _VECTORS[3])
     assert store.vector_for_iri("urn:nope") is None
+
+
+def test_vector_matrix_collects_all_rows(tmp_path):
+    parquet = tmp_path / "g.parquet"
+    _write_parquet(parquet, _VECTORS, row_groups=2)
+
+    store = SidecarStore.open(parquet)
+    matrix = store.vector_matrix()
+
+    assert matrix.shape == (len(_VECTORS), _DIM)
+    assert np.allclose(matrix, np.stack(_VECTORS))
