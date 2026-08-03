@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 import pytest
 from usearch.index import Index
 
-from okn_embeddings.indexing.ann import (
+from okn_embeddings.ann.build import (
     build_index,
     index_manifest_path,
     index_path_for,

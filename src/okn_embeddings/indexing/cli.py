@@ -5,11 +5,11 @@ from typing import Annotated, NoReturn
 import typer
 from loguru import logger
 
+from ..ann.build import VECTOR_DTYPES, build_index
 from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
-from .ann import VECTOR_DTYPES, build_index
 from .embed import embed_file
 from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration

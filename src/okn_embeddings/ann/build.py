@@ -20,8 +20,12 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 from usearch.index import Index
 
-from .embed import METADATA_PREFIX
-from .manifest import file_sha256, package_version, write_manifest
+from ..indexing.embed import METADATA_PREFIX
+from ..indexing.manifest import (
+    file_sha256,
+    package_version,
+    write_manifest,
+)
 
 INDEX_SUFFIX = ".usearch"
 INDEX_MANIFEST_FORMAT = 1
