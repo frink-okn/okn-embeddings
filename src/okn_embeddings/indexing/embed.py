@@ -57,6 +57,19 @@ NORMALIZED_TOLERANCE = 1e-3
 # keeping row groups large enough for efficient scans.
 FLUSH_ROWS = 4096
 
+# The vector column is written uncompressed and without dictionary encoding
+# so a reader can memory-map the file and view the values zero-copy;
+# float32 embeddings are near-incompressible, so nothing is given up. The
+# text columns keep compression.
+PARQUET_COMPRESSION = {
+    "iris.list.element": "SNAPPY",
+    "iri_count": "SNAPPY",
+    "label": "SNAPPY",
+    "embedding_text": "SNAPPY",
+    "vector.list.element": "NONE",
+}
+PARQUET_DICTIONARY_COLUMNS = ["iris.list.element", "label", "embedding_text"]
+
 
 def vector_schema(dim: int) -> pa.Schema:
     return pa.schema(
@@ -170,7 +183,12 @@ def embed_file(
     count = 0
     max_norm_deviation = 0.0
 
-    with pq.ParquetWriter(output, schema) as writer:
+    with pq.ParquetWriter(
+        output,
+        schema,
+        compression=PARQUET_COMPRESSION,
+        use_dictionary=PARQUET_DICTIONARY_COLUMNS,
+    ) as writer:
 
         def flush() -> None:
             nonlocal rows, vectors

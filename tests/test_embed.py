@@ -139,6 +139,28 @@ def test_small_flush_rows_still_writes_every_row(
     ]
 
 
+def test_vector_column_is_mmappable(embedder: FastEmbedEmbedder, tmp_path):
+    # The vector column must stay uncompressed and plain-encoded so readers
+    # can memory-map the file and view the values zero-copy.
+    path = tmp_path / "g.jsonl"
+    _write_records(path, 3)
+    output = tmp_path / "g.parquet"
+
+    _embed(embedder, path, output)
+
+    parquet = pq.ParquetFile(output, memory_map=True)
+    codecs = {}
+    for i in range(parquet.metadata.row_group(0).num_columns):
+        column = parquet.metadata.row_group(0).column(i)
+        codecs[column.path_in_schema] = column.compression
+    assert codecs["vector.list.element"] == "UNCOMPRESSED"
+    assert codecs["embedding_text"] == "SNAPPY"
+
+    chunk = parquet.read(columns=["vector"]).column("vector").chunks[0]
+    view = chunk.flatten().to_numpy(zero_copy_only=True)  # raises if copied
+    assert view.dtype == np.float32
+
+
 def test_accepts_singular_iri_schema(embedder: FastEmbedEmbedder, tmp_path):
     # materialize.py emits a singular `iri`; index.py emits an `iris` list.
     path = tmp_path / "g.jsonl"
