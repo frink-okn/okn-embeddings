@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
@@ -7,7 +8,10 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
+from ..ann.sidecar import SidecarStore
 from ..config import AppContext
+from ..config.settings import load_settings
+from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
 from ..core.explore import GraphSurveyResult, run_survey
 from ..core.graphs import get_graph_facets
@@ -154,6 +158,96 @@ def search(
         _fail(friendly_error(e))
 
     rows = [summarize_point(p) for p in response.points]
+
+    if as_json:
+        _print_results_json(rows, show_repr)
+    else:
+        _print_results_table(rows, show_repr)
+
+
+@app.command()
+def local(
+    term: Annotated[
+        str,
+        typer.Argument(help="Query text, or a node IRI when --type node."),
+    ],
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to search. A usearch index beside a "
+                "file (<stem>.usearch) is used when present; otherwise "
+                "search is an exact scan."
+            ),
+        ),
+    ],
+    feature_type: Annotated[
+        FeatureType,
+        typer.Option(
+            "--type",
+            "-t",
+            help="Search by free text or by an existing node's IRI.",
+        ),
+    ] = FeatureType.text,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-l", min=1, help="Maximum results."),
+    ] = 10,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", min=0, help="Results offset (pagination)."),
+    ] = 0,
+    exact: Annotated[
+        bool,
+        typer.Option("--exact", help="Exact (kNN) search instead of ANN."),
+    ] = False,
+    show_repr: Annotated[
+        bool,
+        typer.Option(
+            "--show-repr",
+            help="Include each result's embedding text.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output JSON instead of a table."),
+    ] = False,
+):
+    """Search local embed Parquet artifacts instead of Qdrant.
+
+    Results from multiple files are merged by score (comparable when the
+    files share one embedding model) with each row's graph taken from the
+    file's metadata. No server is contacted.
+    """
+    stores: list[SidecarStore] = []
+    for path in paths:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            stores.append(SidecarStore.open(path))
+        except ValueError as e:
+            _fail(str(e))
+
+    if feature_type == FeatureType.node:
+        vector = None
+        for store in stores:
+            vector = store.vector_for_iri(term)
+            if vector is not None:
+                break
+        if vector is None:
+            _fail(f"IRI not found in any given file: {term}")
+    else:
+        # The only step that needs the model; node search is model-free.
+        vector = make_embedder(load_settings()).embed(term)
+
+    fetch = limit + offset
+    rows = [
+        row
+        for store in stores
+        for row in store.search(vector, fetch, exact=exact)
+    ]
+    rows.sort(key=lambda r: (-(r.score or 0.0), r.id))
+    rows = rows[offset : offset + limit]
 
     if as_json:
         _print_results_json(rows, show_repr)
