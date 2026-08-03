@@ -6,6 +6,13 @@ import typer
 from loguru import logger
 
 from ..ann.build import VECTOR_DTYPES, build_index
+from ..ann.eval import (
+    DEFAULT_EFS,
+    DEFAULT_KS,
+    DEFAULT_QUERIES,
+    DEFAULT_SEED,
+    evaluate_and_record,
+)
 from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
@@ -465,6 +472,94 @@ def build_index_cmd(
             _fail(f"{path}: {e}")
         typer.echo(f"Indexed {count} vectors into {index_file}")
         typer.echo(f"Wrote manifest to {manifest_file}")
+
+
+@app.command("eval-index")
+def eval_index_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help="Embed Parquet files whose usearch indexes to evaluate.",
+        ),
+    ],
+    queries: Annotated[
+        int,
+        typer.Option(
+            "--queries",
+            min=1,
+            help="Stored vectors to sample as queries.",
+        ),
+    ] = DEFAULT_QUERIES,
+    k: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--k",
+            min=1,
+            help="Recall@k values to measure (repeatable).",
+        ),
+    ] = None,
+    ef: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--ef",
+            min=1,
+            help="expansion_search values to sweep (repeatable).",
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Query sampling seed."),
+    ] = DEFAULT_SEED,
+    write: Annotated[
+        bool,
+        typer.Option(
+            "--write/--no-write",
+            help="Record the evaluation in the index manifest.",
+        ),
+    ] = True,
+):
+    """Measure index recall against exact search, and record it.
+
+    Samples stored vectors as queries, computes exact ground truth by brute
+    force over the Parquet vectors, and reports recall@k across an
+    expansion_search sweep, plus per-query timings for both paths. The
+    result is written into the index manifest's `evaluation` block, so the
+    artifact itself says what "approximate" means for it.
+    """
+    ks = k or list(DEFAULT_KS)
+    efs = ef or list(DEFAULT_EFS)
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            block = evaluate_and_record(
+                path,
+                queries=queries,
+                ks=ks,
+                efs=efs,
+                seed=seed,
+                write=write,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+
+        flat_ms = block["flat"]["mean_query_ms"]
+        typer.echo(
+            f"{path}: {block['queries']} queries, "
+            f"flat scan {flat_ms} ms/query"
+        )
+        for step in block["sweep"]:
+            recalls = "  ".join(
+                f"recall@{k_}={value:.4f}"
+                for k_, value in step["recall"].items()
+            )
+            typer.echo(
+                f"  ef={step['expansion_search']:<5} {recalls}  "
+                f"{step['mean_query_ms']} ms/query"
+            )
+        if write:
+            typer.echo("Recorded evaluation in the index manifest")
 
 
 @app.command()
