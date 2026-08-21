@@ -13,6 +13,7 @@ from ..ann.eval import (
     DEFAULT_SEED,
     evaluate_and_record,
 )
+from ..ann.sketch import MAX_K, build_sketch
 from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
@@ -546,8 +547,7 @@ def eval_index_cmd(
 
         flat_ms = block["flat"]["mean_query_ms"]
         typer.echo(
-            f"{path}: {block['queries']} queries, "
-            f"flat scan {flat_ms} ms/query"
+            f"{path}: {block['queries']} queries, flat scan {flat_ms} ms/query"
         )
         for step in block["sweep"]:
             recalls = "  ".join(
@@ -560,6 +560,72 @@ def eval_index_cmd(
             )
         if write:
             typer.echo("Recorded evaluation in the index manifest")
+
+
+@app.command("build-sketch")
+def build_sketch_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to sketch. Each gets a routing sketch "
+                "(<stem>.sketch.parquet) written beside it."
+            ),
+        ),
+    ],
+    k: Annotated[
+        int | None,
+        typer.Option(
+            "--k",
+            min=1,
+            max=MAX_K,
+            help=(
+                "Number of centroids. Unset picks K automatically from "
+                "the radius-vs-K curve."
+            ),
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="k-means sampling seed."),
+    ] = 42,
+    radius_quantile: Annotated[
+        float,
+        typer.Option(
+            "--radius-quantile",
+            min=0.0,
+            max=1.0,
+            help=(
+                "Quantile radius recorded per cluster alongside the max, "
+                "used for yield ranking."
+            ),
+        ),
+    ] = 0.9,
+):
+    """Build a routing sketch beside each embed Parquet artifact.
+
+    The sketch answers "is this graph worth an ANN probe for this query"
+    from a few hundred KB: a certified no when the query provably clears
+    every cluster, and a yield ranking otherwise. Only comparable across
+    graphs sharing the parent's convention_id.
+    """
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            sketch_file, clusters, unsaturated = build_sketch(
+                path,
+                k=k,
+                seed=seed,
+                radius_quantile=radius_quantile,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+        suffix = " (unsaturated: every vector is its own centroid)"
+        typer.echo(
+            f"Sketched {clusters} centroids into {sketch_file}"
+            + (suffix if unsaturated else "")
+        )
 
 
 @app.command()
