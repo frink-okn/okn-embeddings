@@ -115,7 +115,7 @@ def test_file_metadata_describes_the_vectors(
     assert vector_type.list_size == dim
 
 
-def test_convention_id_hashes_the_full_recipe(
+def test_convention_id_hashes_the_vector_space(
     embedder: SentenceTransformerEmbedder, tmp_path
 ):
     path = tmp_path / "g.jsonl"
@@ -127,11 +127,10 @@ def test_convention_id_hashes_the_full_recipe(
 
     dim = int(embedder.embed("dimension probe").shape[0])
     stamped = meta[METADATA_PREFIX + "convention_id"]
-    # No textify manifest beside the input, so verbalization is None.
-    assert stamped == convention_id(_MODEL, dim, "cosine", True, None)
-    # Any ingredient change must change the identity.
-    assert stamped != convention_id("other-model", dim, "cosine", True, None)
-    assert stamped != convention_id(_MODEL, dim, "cosine", True, "abc123")
+    assert stamped == convention_id(_MODEL, dim, "cosine", True)
+    # Any vector-space ingredient change must change the identity.
+    assert stamped != convention_id("other-model", dim, "cosine", True)
+    assert stamped != convention_id(_MODEL, dim, "dot", True)
 
 
 def test_embed_file_honors_limit(

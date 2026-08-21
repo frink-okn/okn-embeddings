@@ -38,7 +38,7 @@ METADATA_KEYS = (
     "metric",  # distance the model is trained for; the query side uses this
     "normalized",  # "true" when every stored vector is unit-length
     "record_count",
-    "convention_id",  # content hash of the full embedding recipe (see below)
+    "convention_id",  # content hash of the vector space (see below)
 )
 
 # When a textify provenance manifest sits beside the input records, these are
@@ -78,23 +78,28 @@ def convention_id(
     dim: int,
     metric: str,
     normalized: bool,
-    verbalization_sha256: str | None,
 ) -> str:
-    """Content hash of the embedding recipe, the federation join key.
+    """Content hash of the vector space, the cross-graph comparison key.
 
-    Two artifacts are vector-comparable only when every ingredient that
-    shapes the embedding space matches: the model (which fixes the
+    Two artifacts are vector-comparable exactly when everything that
+    determines the embedding space matches: the model (which fixes the
     tokenizer and preprocessing), the vector width, the distance metric,
-    normalization, and the verbalization recipe that produced the input
-    text. Hashing them together gives one identity to group on, instead
-    of comparing five fields and forgetting one.
+    and normalization. Hashing them together gives one identity to group
+    on, instead of comparing four fields and forgetting one.
+
+    The textify config deliberately stays out: every graph textifies with
+    its own config, and a query vector is comparable against any graph
+    embedded with the same model regardless of how that graph's documents
+    were written. What textification does shift is score *calibration*
+    across graphs -- which is the client's concern, and why the config
+    hash is stamped beside this id (`config_sha256`) rather than inside
+    it.
     """
     recipe = {
         "model": model,
         "dim": dim,
         "metric": metric,
         "normalized": normalized,
-        "verbalization": verbalization_sha256,
     }
     canonical = json.dumps(
         recipe, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -255,11 +260,7 @@ def embed_file(
         }
         metadata.update(manifest_metadata(path))
         metadata[METADATA_PREFIX + "convention_id"] = convention_id(
-            model_name,
-            dim,
-            "cosine",
-            normalized,
-            metadata.get(METADATA_PREFIX + "config_sha256"),
+            model_name, dim, "cosine", normalized
         )
         writer.add_key_value_metadata(metadata)
 
