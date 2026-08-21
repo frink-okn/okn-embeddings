@@ -196,9 +196,17 @@ def embed_file(
     limit: int | None = None,
     flush_rows: int = FLUSH_ROWS,
     progress_enabled: bool = False,
+    graph: str | None = None,
 ) -> int:
-    """Embed one graph's records into a Parquet file. Returns the row count."""
-    graph = path.stem
+    """Embed one graph's records into a Parquet file. Returns the row count.
+
+    `graph` names the graph in the artifact metadata; None falls back to
+    the input file's stem, which is only right when files are named after
+    their graphs (my-graph.jsonl) rather than kept in per-graph
+    directories (rural-kg/records.jsonl).
+    """
+    if graph is None:
+        graph = path.stem
     dim = int(embedder.embed("dimension probe").shape[0])
     schema = vector_schema(dim)
 

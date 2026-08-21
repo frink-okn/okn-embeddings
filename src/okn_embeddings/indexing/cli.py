@@ -349,6 +349,16 @@ def embed(
             help="Show a per-graph record progress bar.",
         ),
     ] = True,
+    graph: Annotated[
+        str | None,
+        typer.Option(
+            "--graph",
+            help=(
+                "Graph name recorded in the artifact metadata (default: "
+                "the input file's stem). Single input only."
+            ),
+        ),
+    ] = None,
 ):
     """Embed materialized JSONL records into self-described Parquet files.
 
@@ -357,6 +367,11 @@ def embed(
     (Qdrant upload, ANN index builds) consume this artifact instead of
     re-embedding.
     """
+    if graph is not None and len(inputs) > 1:
+        raise typer.BadParameter(
+            "--graph names one graph; it cannot apply to multiple inputs"
+        )
+
     settings = load_settings()
     # Deliberately not AppContext.from_env(): embedding needs no Qdrant
     # connection, only the model.
@@ -378,6 +393,7 @@ def embed(
                 batch_size=batch_size,
                 limit=limit,
                 progress_enabled=progress,
+                graph=graph,
             )
         except ValueError as e:
             _fail(str(e))

@@ -115,6 +115,20 @@ def test_file_metadata_describes_the_vectors(
     assert vector_type.list_size == dim
 
 
+def test_graph_option_overrides_the_file_stem(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
+    # Artifacts kept in per-graph directories all share a stem like
+    # records.jsonl; the explicit name is what keeps their metadata honest.
+    path = tmp_path / "records.jsonl"
+    _write_records(path, 2)
+    output = tmp_path / "records.parquet"
+
+    _embed(embedder, path, output, graph="rural-kg")
+
+    assert _metadata(output)[METADATA_PREFIX + "graph"] == "rural-kg"
+
+
 def test_convention_id_hashes_the_vector_space(
     embedder: SentenceTransformerEmbedder, tmp_path
 ):
