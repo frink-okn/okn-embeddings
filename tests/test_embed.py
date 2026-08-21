@@ -5,7 +5,11 @@ import pyarrow.parquet as pq
 import pytest
 
 from okn_embeddings.core.embedding import SentenceTransformerEmbedder
-from okn_embeddings.indexing.embed import METADATA_PREFIX, embed_file
+from okn_embeddings.indexing.embed import (
+    METADATA_PREFIX,
+    convention_id,
+    embed_file,
+)
 
 _MODEL = "test-model"
 
@@ -68,7 +72,9 @@ def test_embed_file_preserves_records_in_input_order(
     assert table.column("label").to_pylist() == [f"L{i}" for i in range(5)]
 
 
-def test_stored_vectors_match_embedder(embedder: SentenceTransformerEmbedder, tmp_path):
+def test_stored_vectors_match_embedder(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
     path = tmp_path / "g.jsonl"
     _write_records(path, 3)
     output = tmp_path / "g.parquet"
@@ -109,7 +115,28 @@ def test_file_metadata_describes_the_vectors(
     assert vector_type.list_size == dim
 
 
-def test_embed_file_honors_limit(embedder: SentenceTransformerEmbedder, tmp_path):
+def test_convention_id_hashes_the_full_recipe(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
+    path = tmp_path / "g.jsonl"
+    _write_records(path, 2)
+    output = tmp_path / "g.parquet"
+
+    _embed(embedder, path, output)
+    meta = _metadata(output)
+
+    dim = int(embedder.embed("dimension probe").shape[0])
+    stamped = meta[METADATA_PREFIX + "convention_id"]
+    # No textify manifest beside the input, so verbalization is None.
+    assert stamped == convention_id(_MODEL, dim, "cosine", True, None)
+    # Any ingredient change must change the identity.
+    assert stamped != convention_id("other-model", dim, "cosine", True, None)
+    assert stamped != convention_id(_MODEL, dim, "cosine", True, "abc123")
+
+
+def test_embed_file_honors_limit(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
     path = tmp_path / "g.jsonl"
     _write_records(path, 10)
     output = tmp_path / "g.parquet"
@@ -139,7 +166,9 @@ def test_small_flush_rows_still_writes_every_row(
     ]
 
 
-def test_vector_column_is_mmappable(embedder: SentenceTransformerEmbedder, tmp_path):
+def test_vector_column_is_mmappable(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
     # The vector column must stay uncompressed and plain-encoded so readers
     # can memory-map the file and view the values zero-copy.
     path = tmp_path / "g.jsonl"
@@ -161,7 +190,9 @@ def test_vector_column_is_mmappable(embedder: SentenceTransformerEmbedder, tmp_p
     assert view.dtype == np.float32
 
 
-def test_accepts_singular_iri_schema(embedder: SentenceTransformerEmbedder, tmp_path):
+def test_accepts_singular_iri_schema(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
     # materialize.py emits a singular `iri`; index.py emits an `iris` list.
     path = tmp_path / "g.jsonl"
     path.write_text(

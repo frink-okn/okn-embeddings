@@ -12,6 +12,7 @@ Row order is input order, which `textify` already makes deterministic, so a
 row's ordinal is a stable key for index artifacts built over this file.
 """
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ METADATA_KEYS = (
     "metric",  # distance the model is trained for; the query side uses this
     "normalized",  # "true" when every stored vector is unit-length
     "record_count",
+    "convention_id",  # content hash of the full embedding recipe (see below)
 )
 
 # When a textify provenance manifest sits beside the input records, these are
@@ -69,6 +71,35 @@ PARQUET_COMPRESSION = {
     "vector.list.element": "NONE",
 }
 PARQUET_DICTIONARY_COLUMNS = ["iris.list.element", "label", "embedding_text"]
+
+
+def convention_id(
+    model: str,
+    dim: int,
+    metric: str,
+    normalized: bool,
+    verbalization_sha256: str | None,
+) -> str:
+    """Content hash of the embedding recipe, the federation join key.
+
+    Two artifacts are vector-comparable only when every ingredient that
+    shapes the embedding space matches: the model (which fixes the
+    tokenizer and preprocessing), the vector width, the distance metric,
+    normalization, and the verbalization recipe that produced the input
+    text. Hashing them together gives one identity to group on, instead
+    of comparing five fields and forgetting one.
+    """
+    recipe = {
+        "model": model,
+        "dim": dim,
+        "metric": metric,
+        "normalized": normalized,
+        "verbalization": verbalization_sha256,
+    }
+    canonical = json.dumps(
+        recipe, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def vector_schema(dim: int) -> pa.Schema:
@@ -115,9 +146,7 @@ def rows_to_table(
     iris, iri_counts, labels, texts = zip(*rows, strict=True)
     dim = schema.field("vector").type.list_size
 
-    flat = np.concatenate(
-        [np.asarray(v, dtype=np.float32) for v in vectors]
-    )
+    flat = np.concatenate([np.asarray(v, dtype=np.float32) for v in vectors])
     vector_array = pa.FixedSizeListArray.from_arrays(pa.array(flat), dim)
 
     return pa.Table.from_arrays(
@@ -139,8 +168,7 @@ def manifest_metadata(records_path: Path) -> dict[str, str]:
         return {}
 
     entries = {
-        METADATA_PREFIX
-        + "textify_manifest": json.dumps(
+        METADATA_PREFIX + "textify_manifest": json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":")
         )
     }
@@ -226,6 +254,13 @@ def embed_file(
             METADATA_PREFIX + "record_count": str(count),
         }
         metadata.update(manifest_metadata(path))
+        metadata[METADATA_PREFIX + "convention_id"] = convention_id(
+            model_name,
+            dim,
+            "cosine",
+            normalized,
+            metadata.get(METADATA_PREFIX + "config_sha256"),
+        )
         writer.add_key_value_metadata(metadata)
 
     progress.close()
