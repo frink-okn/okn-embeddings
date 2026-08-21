@@ -164,8 +164,10 @@ def materialize_records_to_path(
                 config, target
             ):
                 root_iter = reader.root_iris(target_config.type)
+                total = reader.root_count(target_config.type)
                 if limit is not None:
                     root_iter = islice(root_iter, limit)
+                    total = limit if total is None else min(total, limit)
                 worker = partial(
                     _materialize_chunk_to_shards,
                     target_name,
@@ -173,7 +175,9 @@ def materialize_records_to_path(
                     shard_count,
                 )
                 bar = (
-                    tqdm(desc=target_name, unit=" roots") if progress else None
+                    tqdm(desc=target_name, unit=" roots", total=total)
+                    if progress
+                    else None
                 )
                 try:
                     for done in pool.imap_unordered(

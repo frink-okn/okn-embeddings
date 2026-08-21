@@ -347,10 +347,14 @@ def materialize_records(
 
     for target_name, target_config in target_config_items(config, target):
         root_iter = reader.root_iris(target_config.type)
+        total = reader.root_count(target_config.type)
         if limit is not None:
             root_iter = islice(root_iter, limit)
+            total = limit if total is None else min(total, limit)
         if progress:
-            root_iter = tqdm(root_iter, desc=target_name, unit=" roots")
+            root_iter = tqdm(
+                root_iter, desc=target_name, unit=" roots", total=total
+            )
         for iri in root_iter:
             merge_worker_record(
                 by_digest,
