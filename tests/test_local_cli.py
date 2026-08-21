@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 from typer.testing import CliRunner
 
 from okn_embeddings.cli.main import app
-from okn_embeddings.core.embedding import FastEmbedEmbedder
+from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 from okn_embeddings.indexing.embed import (
     METADATA_PREFIX,
     rows_to_table,
@@ -132,7 +132,7 @@ def test_local_missing_file_fails(tmp_path):
 
 
 def test_local_text_search_uses_the_model(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     # Vectors produced by the same model the CLI will load, so a text query
     # must rank its own document first.

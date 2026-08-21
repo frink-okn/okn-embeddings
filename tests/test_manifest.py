@@ -2,7 +2,7 @@ import json
 
 import pyarrow.parquet as pq
 
-from okn_embeddings.core.embedding import FastEmbedEmbedder
+from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 from okn_embeddings.indexing.embed import METADATA_PREFIX, embed_file
 from okn_embeddings.indexing.manifest import (
     build_manifest,
@@ -87,7 +87,7 @@ def test_read_manifest_returns_none_when_absent(tmp_path):
 
 
 def test_embed_folds_manifest_into_parquet_metadata(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     records_path = tmp_path / "g.jsonl"
     records_path.write_text(
@@ -114,7 +114,7 @@ def test_embed_folds_manifest_into_parquet_metadata(
 
 
 def test_embed_without_manifest_omits_manifest_keys(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     records_path = tmp_path / "g.jsonl"
     records_path.write_text(

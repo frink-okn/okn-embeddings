@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from okn_embeddings.core.embedding import FastEmbedEmbedder
+from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 from okn_embeddings.indexing.embed import METADATA_PREFIX, embed_file
 
 _MODEL = "test-model"
@@ -42,7 +42,7 @@ def _metadata(path) -> dict[str, str]:
 
 
 def test_embed_file_preserves_records_in_input_order(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     path = tmp_path / "my-graph.jsonl"
     _write_records(path, 5)
@@ -68,7 +68,7 @@ def test_embed_file_preserves_records_in_input_order(
     assert table.column("label").to_pylist() == [f"L{i}" for i in range(5)]
 
 
-def test_stored_vectors_match_embedder(embedder: FastEmbedEmbedder, tmp_path):
+def test_stored_vectors_match_embedder(embedder: SentenceTransformerEmbedder, tmp_path):
     path = tmp_path / "g.jsonl"
     _write_records(path, 3)
     output = tmp_path / "g.parquet"
@@ -86,7 +86,7 @@ def test_stored_vectors_match_embedder(embedder: FastEmbedEmbedder, tmp_path):
 
 
 def test_file_metadata_describes_the_vectors(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     path = tmp_path / "my-graph.jsonl"
     _write_records(path, 4)
@@ -109,7 +109,7 @@ def test_file_metadata_describes_the_vectors(
     assert vector_type.list_size == dim
 
 
-def test_embed_file_honors_limit(embedder: FastEmbedEmbedder, tmp_path):
+def test_embed_file_honors_limit(embedder: SentenceTransformerEmbedder, tmp_path):
     path = tmp_path / "g.jsonl"
     _write_records(path, 10)
     output = tmp_path / "g.parquet"
@@ -122,7 +122,7 @@ def test_embed_file_honors_limit(embedder: FastEmbedEmbedder, tmp_path):
 
 
 def test_small_flush_rows_still_writes_every_row(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     path = tmp_path / "g.jsonl"
     _write_records(path, 5)
@@ -139,7 +139,7 @@ def test_small_flush_rows_still_writes_every_row(
     ]
 
 
-def test_vector_column_is_mmappable(embedder: FastEmbedEmbedder, tmp_path):
+def test_vector_column_is_mmappable(embedder: SentenceTransformerEmbedder, tmp_path):
     # The vector column must stay uncompressed and plain-encoded so readers
     # can memory-map the file and view the values zero-copy.
     path = tmp_path / "g.jsonl"
@@ -161,7 +161,7 @@ def test_vector_column_is_mmappable(embedder: FastEmbedEmbedder, tmp_path):
     assert view.dtype == np.float32
 
 
-def test_accepts_singular_iri_schema(embedder: FastEmbedEmbedder, tmp_path):
+def test_accepts_singular_iri_schema(embedder: SentenceTransformerEmbedder, tmp_path):
     # materialize.py emits a singular `iri`; index.py emits an `iris` list.
     path = tmp_path / "g.jsonl"
     path.write_text(
@@ -179,7 +179,7 @@ def test_accepts_singular_iri_schema(embedder: FastEmbedEmbedder, tmp_path):
 
 
 def test_missing_embedding_text_is_an_error(
-    embedder: FastEmbedEmbedder, tmp_path
+    embedder: SentenceTransformerEmbedder, tmp_path
 ):
     path = tmp_path / "g.jsonl"
     path.write_text(
