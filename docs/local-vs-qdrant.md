@@ -29,6 +29,20 @@ backends.
 | 256 | 0.992 | 0.977 |
 | flat scan | 1.000 | 1.000 |
 
+## Index quantization (`build-index --dtype`)
+
+Same 250k corpus, recall from `eval-index` (200 queries):
+
+| dtype | index size | recall@10 (ef=64) | recall@100 (ef=256) | ms/query (ef=64) |
+|---|---:|---:|---:|---:|
+| f32 | 402 MB | 0.987 | 0.977 | 0.40 |
+| f16 | 219 MB | 0.984 | 0.976 | 0.23 |
+| i8  | 127 MB | 0.933 | 0.935 | 0.11 |
+
+f16 halves the file and keeps recall within noise of f32 (and is faster —
+smaller vectors, better cache behavior). i8 costs ~5 points of recall@10 for
+another 40% size cut. f16 is the right default for published sidecars.
+
 ## Cold start (fresh `uv run okn-search …`)
 
 ~6 s either way. `uv run python -c pass` alone is ~56 ms, so the rest is
