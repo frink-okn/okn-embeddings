@@ -644,6 +644,83 @@ def build_sketch_cmd(
         )
 
 
+@app.command("plot-map")
+def plot_map_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to map. All must share one embedding "
+                "convention. A sketch beside a file (<stem>.sketch.parquet) "
+                "adds its centroids as an overlay."
+            ),
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Output HTML path."),
+    ],
+    sample: Annotated[
+        int,
+        typer.Option(
+            "--sample",
+            min=1,
+            help="Vectors sampled per graph (all rows if fewer).",
+        ),
+    ] = 2000,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Sampling and UMAP seed."),
+    ] = 42,
+    neighbors: Annotated[
+        int,
+        typer.Option(
+            "--neighbors",
+            min=2,
+            help="UMAP n_neighbors: higher favors global structure.",
+        ),
+    ] = 15,
+    min_dist: Annotated[
+        float,
+        typer.Option(
+            "--min-dist",
+            min=0.0,
+            help="UMAP min_dist: lower packs clusters tighter.",
+        ),
+    ] = 0.1,
+):
+    """Write an interactive UMAP map of one or more embed artifacts.
+
+    Samples vectors per graph, projects them (plus any sketch centroids)
+    to 2-D, and writes a self-contained HTML page: pan/zoom scatter,
+    per-graph legend with isolate, label search, centroid overlay.
+    Needs the `evaluation` dependency group (umap-learn).
+    """
+    try:
+        from ..ann.plot import build_map
+    except ImportError:
+        _fail(
+            "plot-map needs umap-learn, which is in the `evaluation` "
+            "dependency group of a source checkout (uv sync)."
+        )
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+    try:
+        result = build_map(
+            inputs,
+            output,
+            sample=sample,
+            seed=seed,
+            neighbors=neighbors,
+            min_dist=min_dist,
+        )
+    except ValueError as e:
+        _fail(str(e))
+    typer.echo(f"Wrote embedding map to {result}")
+
+
 @app.command()
 def upload(
     inputs: Annotated[

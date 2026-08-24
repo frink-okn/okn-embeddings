@@ -61,6 +61,7 @@ dev = [
 # main dependencies when `embed` started writing Parquet artifacts.)
 evaluation = [
     "pandas>=3.0.1",
+    "umap-learn>=0.5.12",
 ]
 
 [tool.pytest.ini_options]
