@@ -3,25 +3,30 @@ from urllib.parse import quote
 import httpx
 from flask import Blueprint, jsonify, render_template, request
 from pydantic import ValidationError
-from qdrant_client.models import ScoredPoint
 
 from ..core.errors import URINotFoundError, unwrap_qdrant_error
 from ..core.models import Query, build_query
 from ..core.query import run_similarity_search
-from ..core.results import summarize_point
+from ..core.results import ResultRow
 from ._flask import get_ctx
 
 api = Blueprint("api", __name__)
 web = Blueprint("web", __name__)
 
 
-def serialize_point(p: ScoredPoint) -> dict:
-    row = summarize_point(p)
-
+def serialize_row(row: ResultRow) -> dict:
+    # `payload` mirrors the fields templates and API consumers read off
+    # the old Qdrant payload, so the response shape is backend-agnostic.
     return {
         "id": row.id,
         "score": row.score,
-        "payload": p.payload or {},
+        "payload": {
+            "label": row.label,
+            "graph": row.graph,
+            "repr": row.repr,
+            "iri": row.iris,
+            "iri_count": row.iri_count,
+        },
         "iris": row.iris,
         "iri_count": row.iri_count,
         "primary_uri": row.primary_uri,
@@ -65,7 +70,7 @@ def post_query():
         msg, status = parse_error(e)
         return jsonify({"error": msg}), status
 
-    return jsonify({"results": [serialize_point(p) for p in result.points]})
+    return jsonify({"results": [serialize_row(row) for row in result.rows]})
 
 
 @web.get("/")
@@ -86,6 +91,7 @@ def index():
         graphs=graphs,
         graph_mode=graph_mode,
         selected_graphs=selected_graphs,
+        backend_name=ctx.settings.search_backend,
     )
 
 
@@ -123,7 +129,7 @@ def post_query_view():
             error=msg,
         ), status
 
-    results = [serialize_point(p) for p in result.points]
+    results = [serialize_row(row) for row in result.rows]
     return render_template(
         "partials/results_table.html",
         results=results,

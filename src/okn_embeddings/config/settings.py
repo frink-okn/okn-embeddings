@@ -26,6 +26,13 @@ class AppSettings(BaseSettings):
     qdrant_timeout: int = 30
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
+    # Where similarity queries run: "qdrant" (a server at qdrant_location)
+    # or "sidecar" (local embed Parquet + usearch files, no server).
+    # sidecar_paths is a glob over embed Parquet files, e.g.
+    # "data/*/graph-embed/records.parquet"; each file is one graph.
+    search_backend: str = "qdrant"
+    sidecar_paths: str = ""
+
     # Embedding backend knobs. `embed_device` picks the torch device:
     # `auto` -> CUDA if present, else MPS on Apple Silicon, else CPU; the
     # concrete values `cpu`, `cuda`, `mps` pin. `embed_batch_size` is the

@@ -4,6 +4,7 @@ from qdrant_client.models import Distance, VectorParams
 
 from okn_embeddings.config.context import AppContext
 from okn_embeddings.config.settings import AppSettings
+from okn_embeddings.core.backend import QdrantBackend
 from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 
 _COLLECTION = "test-graph"
@@ -32,4 +33,9 @@ def ctx(embedder: SentenceTransformerEmbedder) -> AppContext:
     client.create_collection(
         _COLLECTION, VectorParams(size=dim, distance=Distance.COSINE)
     )
-    return AppContext(client=client, embedder=embedder, settings=settings)
+    return AppContext(
+        client=client,
+        embedder=embedder,
+        settings=settings,
+        backend=QdrantBackend(client, settings),
+    )

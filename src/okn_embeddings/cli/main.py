@@ -17,7 +17,7 @@ from ..core.explore import GraphSurveyResult, run_survey
 from ..core.graphs import get_graph_facets
 from ..core.models import build_feature, build_query
 from ..core.query import run_similarity_search
-from ..core.results import ResultRow, summarize_point
+from ..core.results import ResultRow
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
@@ -157,7 +157,7 @@ def search(
     except Exception as e:
         _fail(friendly_error(e))
 
-    rows = [summarize_point(p) for p in response.points]
+    rows = response.rows
 
     if as_json:
         _print_results_json(rows, show_repr)
@@ -274,7 +274,7 @@ def _print_survey_table(
 
     console = Console()
     for r in results:
-        rows = [summarize_point(p) for p in r.points]
+        rows = r.rows
         best = (
             f"{rows[0].score:.4f}"
             if rows and rows[0].score is not None
@@ -315,9 +315,7 @@ def _print_survey_json(
     out = [
         {
             "graph": r.graph,
-            "results": [
-                _row_to_dict(summarize_point(p), show_repr) for p in r.points
-            ],
+            "results": [_row_to_dict(row, show_repr) for row in r.rows],
         }
         for r in results
     ]

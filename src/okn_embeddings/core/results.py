@@ -17,6 +17,14 @@ class ResultRow:
     repr: str
 
 
+@dataclass
+class TimedSearchResult:
+    """What `run_similarity_search` returns: hits plus wall time."""
+
+    rows: list[ResultRow]
+    time: float
+
+
 def summarize_point(p: ScoredPoint) -> ResultRow:
     """Extract the fields every interface needs from a scored point.
 
