@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
@@ -7,13 +8,16 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
+from ..ann.sidecar import SidecarStore
 from ..config import AppContext
+from ..config.settings import load_settings
+from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
 from ..core.explore import GraphSurveyResult, run_survey
 from ..core.graphs import get_graph_facets
 from ..core.models import build_feature, build_query
 from ..core.query import run_similarity_search
-from ..core.results import ResultRow, summarize_point
+from ..core.results import ResultRow
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
@@ -153,7 +157,107 @@ def search(
     except Exception as e:
         _fail(friendly_error(e))
 
-    rows = [summarize_point(p) for p in response.points]
+    rows = response.rows
+
+    if as_json:
+        _print_results_json(rows, show_repr)
+    else:
+        _print_results_table(rows, show_repr)
+
+
+@app.command()
+def local(
+    term: Annotated[
+        str,
+        typer.Argument(help="Query text, or a node IRI when --type node."),
+    ],
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to search. A usearch index beside a "
+                "file (<stem>.usearch) is used when present; otherwise "
+                "search is an exact scan."
+            ),
+        ),
+    ],
+    feature_type: Annotated[
+        FeatureType,
+        typer.Option(
+            "--type",
+            "-t",
+            help="Search by free text or by an existing node's IRI.",
+        ),
+    ] = FeatureType.text,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-l", min=1, help="Maximum results."),
+    ] = 10,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", min=0, help="Results offset (pagination)."),
+    ] = 0,
+    exact: Annotated[
+        bool,
+        typer.Option("--exact", help="Exact (kNN) search instead of ANN."),
+    ] = False,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help=(
+                "Hash each Parquet file and check it against its index "
+                "manifest before searching (slow on large files)."
+            ),
+        ),
+    ] = False,
+    show_repr: Annotated[
+        bool,
+        typer.Option(
+            "--show-repr",
+            help="Include each result's embedding text.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output JSON instead of a table."),
+    ] = False,
+):
+    """Search local embed Parquet artifacts instead of Qdrant.
+
+    Results from multiple files are merged by score (comparable when the
+    files share one embedding model) with each row's graph taken from the
+    file's metadata. No server is contacted.
+    """
+    stores: list[SidecarStore] = []
+    for path in paths:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            stores.append(SidecarStore.open(path, verify=verify))
+        except ValueError as e:
+            _fail(str(e))
+
+    if feature_type == FeatureType.node:
+        vector = None
+        for store in stores:
+            vector = store.vector_for_iri(term)
+            if vector is not None:
+                break
+        if vector is None:
+            _fail(f"IRI not found in any given file: {term}")
+    else:
+        # The only step that needs the model; node search is model-free.
+        vector = make_embedder(load_settings()).embed(term)
+
+    fetch = limit + offset
+    rows = [
+        row
+        for store in stores
+        for row in store.search(vector, fetch, exact=exact)
+    ]
+    rows.sort(key=lambda r: (-(r.score or 0.0), r.id))
+    rows = rows[offset : offset + limit]
 
     if as_json:
         _print_results_json(rows, show_repr)
@@ -170,7 +274,7 @@ def _print_survey_table(
 
     console = Console()
     for r in results:
-        rows = [summarize_point(p) for p in r.points]
+        rows = r.rows
         best = (
             f"{rows[0].score:.4f}"
             if rows and rows[0].score is not None
@@ -211,9 +315,7 @@ def _print_survey_json(
     out = [
         {
             "graph": r.graph,
-            "results": [
-                _row_to_dict(summarize_point(p), show_repr) for p in r.points
-            ],
+            "results": [_row_to_dict(row, show_repr) for row in r.rows],
         }
         for r in results
     ]

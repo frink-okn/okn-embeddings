@@ -15,7 +15,7 @@ from okn_embeddings.core.models import (
     TextFeature,
     build_feature,
 )
-from okn_embeddings.core.query import build_graph_filter
+from okn_embeddings.core.backend import build_graph_filter
 
 
 def test_resolve_target_graphs_include_wins():
@@ -92,9 +92,7 @@ def _seed(ctx: AppContext, rows: list[tuple[str, float]]) -> int:
     return dim
 
 
-def test_run_survey_orders_graphs_by_best_score(
-    ctx: AppContext, monkeypatch
-):
+def test_run_survey_orders_graphs_by_best_score(ctx: AppContext, monkeypatch):
     dim = _seed(
         ctx,
         [
@@ -112,9 +110,7 @@ def test_run_survey_orders_graphs_by_best_score(
         calls["n"] += 1
         return np.array(_unit(dim, 1.0), dtype=np.float32)
 
-    monkeypatch.setattr(
-        "okn_embeddings.core.explore.get_embedding", embed
-    )
+    monkeypatch.setattr("okn_embeddings.core.explore.get_embedding", embed)
 
     results = run_survey(
         ctx,
@@ -125,8 +121,8 @@ def test_run_survey_orders_graphs_by_best_score(
 
     assert calls["n"] == 1  # embedded once, reused for every graph
     assert [r.graph for r in results] == ["g_high", "g_mid", "g_low"]
-    assert len(results[0].points) == 2  # per-graph limit honored
-    assert results[0].points[0].score == pytest.approx(1.0, abs=1e-3)
+    assert len(results[0].rows) == 2  # per-graph limit honored
+    assert results[0].rows[0].score == pytest.approx(1.0, abs=1e-3)
 
 
 def test_run_survey_with_no_filter_surveys_every_graph(

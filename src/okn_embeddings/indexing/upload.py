@@ -10,10 +10,9 @@ deterministically from `(graph, iri, embedding_text)`, so re-running upserts in
 place rather than duplicating.
 """
 
-import json
 import uuid
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from loguru import logger
 from qdrant_client.models import (
@@ -25,53 +24,19 @@ from qdrant_client.models import (
 from tqdm import tqdm
 
 from ..config import AppContext
+from .records import chunks, count_jsonl, iter_jsonl
+
+__all__ = [
+    "chunks",
+    "count_jsonl",
+    "iter_jsonl",
+    "point_id",
+    "payload_for_record",
+    "upload_file",
+    "upload_files",
+]
 
 POINT_ID_NAMESPACE = uuid.UUID("223675f1-af1e-4ce9-b7b6-849178e8c69e")
-
-
-def iter_jsonl(
-    path: Path,
-    limit: int | None = None,
-) -> Iterable[dict[str, Any]]:
-    """Yield each JSON object from a JSONL file, with line-numbered errors."""
-    with path.open("r", encoding="utf-8") as f:
-        for idx, line in enumerate(f, start=1):
-            if limit is not None and idx > limit:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"{path}:{idx}: invalid JSON: {e}") from e
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{idx}: expected a JSON object")
-            yield record
-
-
-def count_jsonl(path: Path, limit: int | None = None) -> int:
-    """Count non-empty lines, so the progress bar knows its total up front."""
-    count = 0
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                count += 1
-                if limit is not None and count >= limit:
-                    break
-    return count
-
-
-def chunks(records: Iterable[dict[str, Any]], size: int):
-    """Group an iterable of records into lists of at most `size`."""
-    batch: list[dict[str, Any]] = []
-    for record in records:
-        batch.append(record)
-        if len(batch) == size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
 
 
 def point_id(graph: str, record: dict[str, Any]) -> str:

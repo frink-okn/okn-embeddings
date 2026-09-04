@@ -14,17 +14,11 @@ class GraphFacet:
 
 
 @cached(
-    cache=TTLCache(maxsize=1, ttl=60 * 10),
-    key=lambda ctx: ctx.settings.qdrant_location,
+    cache=TTLCache(maxsize=4, ttl=60 * 10),
+    key=lambda ctx: id(ctx.backend),
 )
 def get_graph_facets(ctx: "AppContext") -> list[GraphFacet]:
-    res = ctx.client.facet(
-        collection_name=ctx.settings.qdrant_collection,
-        key="graph",
-        limit=100,
-    )
-
-    return [GraphFacet(str(hit.value).strip(), hit.count) for hit in res.hits]
+    return ctx.backend.graph_facets()
 
 
 def get_graphs(ctx: "AppContext") -> list[str]:

@@ -1,7 +1,6 @@
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
-from qdrant_client.http.models import QueryResponse
 
 
 class TextFeature(BaseModel):
@@ -34,10 +33,6 @@ class Query(BaseModel):
                 "Only one of include_graphs or exclude_graphs may be set"
             )
         return self
-
-
-class TimedQueryResponse(QueryResponse):
-    time: float
 
 
 def build_feature(feature_type: str, value: str) -> Feature:

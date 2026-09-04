@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding map</title>
+<style>
+  :root {
+    color-scheme: light dark;
+  }
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --series-8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+  }
+  .viz-root {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--page);
+    color: var(--text-primary);
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 12px 16px 8px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  header .meta { font-size: 12px; color: var(--text-muted); }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .controls input[type="search"] {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    width: 220px;
+  }
+  .controls label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .controls button {
+    font: inherit;
+    color: var(--text-secondary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .controls .hint { color: var(--text-muted); font-size: 12px; }
+  main { display: flex; flex: 1; min-height: 0; }
+  .plot-wrap {
+    flex: 1;
+    position: relative;
+    margin: 0 0 16px 16px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    min-width: 0;
+  }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.panning { cursor: grabbing; }
+  aside {
+    width: 250px;
+    padding: 0 16px 16px 12px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .legend { display: flex; flex-direction: column; gap: 2px; }
+  .legend-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin: 8px 0 4px;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    font: inherit;
+    color: var(--text-primary);
+    text-align: left;
+    width: 100%;
+  }
+  .legend-row:hover { background: var(--grid); }
+  .legend-row[aria-pressed="true"] { background: var(--grid); }
+  .legend-row.dimmed { opacity: 0.4; }
+  .legend-row svg { flex-shrink: 0; }
+  .legend-name {
+    flex: 1;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .legend-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    padding: 6px 9px;
+    font-size: 12px;
+    max-width: 320px;
+    display: none;
+    z-index: 10;
+  }
+  .tooltip .tip-label { font-weight: 600; color: var(--text-primary); }
+  .tooltip .tip-graph {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .tooltip .tip-key { width: 14px; height: 3px; border-radius: 2px; }
+  .details {
+    margin-top: 12px;
+    border-top: 1px solid var(--grid);
+    padding-top: 10px;
+    display: none;
+  }
+  .details.open { display: block; }
+  .details .d-label { font-size: 13px; font-weight: 600; }
+  .details .d-graph {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 3px 0 6px;
+  }
+  .details .d-key { width: 14px; height: 3px; border-radius: 2px; }
+  .details .d-iri {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    word-break: break-all;
+    margin-bottom: 8px;
+  }
+  .details .d-iri a { color: inherit; }
+  .details .d-text-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .details .d-text {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .details .d-close {
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    float: right;
+  }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>Embedding map</h1>
+    <span class="meta" id="meta"></span>
+  </header>
+  <div class="controls">
+    <input type="search" id="search" placeholder="Search labels&hellip;"
+           aria-label="Search labels">
+    <span class="hint" id="search-hint"></span>
+    <label><input type="checkbox" id="show-centroids"> sketch centroids</label>
+    <button id="reset">Reset view</button>
+    <span class="hint">drag to pan &middot; scroll to zoom &middot; click a
+      point for its text &middot; click a graph to isolate</span>
+  </div>
+  <main>
+    <div class="plot-wrap">
+      <canvas id="plot"></canvas>
+      <div class="tooltip" id="tooltip">
+        <div class="tip-label"></div>
+        <div class="tip-graph"><span class="tip-key"></span><span class="tip-name"></span></div>
+      </div>
+    </div>
+    <aside>
+      <div class="legend-title">Graphs</div>
+      <div class="legend" id="legend"></div>
+      <div class="details" id="details">
+        <button class="d-close" id="d-close" aria-label="Close details">&times;</button>
+        <div class="d-label"></div>
+        <div class="d-graph"><span class="d-key"></span><span class="d-name"></span></div>
+        <div class="d-iri"></div>
+        <div class="d-text-title">Embedding text</div>
+        <div class="d-text"></div>
+      </div>
+    </aside>
+  </main>
+</div>
+<script>
+"use strict";
+var DATA = $payload;
+
+var root = document.querySelector(".viz-root");
+var canvas = document.getElementById("plot");
+var ctx = canvas.getContext("2d");
+var tooltip = document.getElementById("tooltip");
+var legendBox = document.getElementById("legend");
+var searchBox = document.getElementById("search");
+var searchHint = document.getElementById("search-hint");
+var centroidToggle = document.getElementById("show-centroids");
+
+var meta = document.getElementById("meta");
+meta.textContent = DATA.points.length + " points from " +
+  DATA.graphs.length + " graphs · UMAP (cosine, n=" +
+  DATA.umap.neighbors + ", min_dist=" + DATA.umap.min_dist + ")";
+
+// Marker shapes double the identity channel so color never carries it
+// alone (4+ series in one dense scatter cannot pass all-pairs color
+// checks; shape + the isolate interaction are the secondary encoding).
+var SHAPES = ["circle", "square", "triangle", "diamond",
+              "cross", "x", "tri-down", "star"];
+
+function seriesColor(i) {
+  var v = getComputedStyle(root)
+    .getPropertyValue("--series-" + ((i % 8) + 1));
+  return v.trim();
+}
+function chrome(name) {
+  return getComputedStyle(root).getPropertyValue(name).trim();
+}
+
+// --- view state ------------------------------------------------------
+var xs = DATA.points.map(function (p) { return p[1]; });
+var ys = DATA.points.map(function (p) { return p[2]; });
+DATA.centroids.forEach(function (c) { xs.push(c[1]); ys.push(c[2]); });
+var xmin = Math.min.apply(null, xs), xmax = Math.max.apply(null, xs);
+var ymin = Math.min.apply(null, ys), ymax = Math.max.apply(null, ys);
+
+var view = {};
+function resetView() {
+  var pad = 0.05 * Math.max(xmax - xmin, ymax - ymin);
+  view.x0 = xmin - pad; view.x1 = xmax + pad;
+  view.y0 = ymin - pad; view.y1 = ymax + pad;
+}
+resetView();
+
+var isolated = null;   // graph index or null
+var matches = null;    // Set of point indexes matching search, or null
+
+function sx(x) {
+  return (x - view.x0) / (view.x1 - view.x0) * canvas.clientWidth;
+}
+function sy(y) {
+  return canvas.clientHeight -
+    (y - view.y0) / (view.y1 - view.y0) * canvas.clientHeight;
+}
+
+// --- drawing ---------------------------------------------------------
+function drawMark(x, y, r, shape, mode) {
+  ctx.beginPath();
+  if (shape === "square") {
+    ctx.rect(x - r, y - r, 2 * r, 2 * r);
+  } else if (shape === "triangle") {
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r * 0.87, y + r * 0.5);
+    ctx.lineTo(x - r * 0.87, y + r * 0.5);
+    ctx.closePath();
+  } else if (shape === "tri-down") {
+    ctx.moveTo(x, y + r);
+    ctx.lineTo(x + r * 0.87, y - r * 0.5);
+    ctx.lineTo(x - r * 0.87, y - r * 0.5);
+    ctx.closePath();
+  } else if (shape === "diamond") {
+    ctx.moveTo(x, y - r * 1.2);
+    ctx.lineTo(x + r * 1.2, y);
+    ctx.lineTo(x, y + r * 1.2);
+    ctx.lineTo(x - r * 1.2, y);
+    ctx.closePath();
+  } else if (shape === "cross") {
+    var t = r * 0.42;
+    ctx.rect(x - t, y - r, 2 * t, 2 * r);
+    ctx.rect(x - r, y - t, 2 * r, 2 * t);
+  } else if (shape === "x") {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    var u = r * 0.42;
+    ctx.rect(-u, -r, 2 * u, 2 * r);
+    ctx.rect(-r, -u, 2 * r, 2 * u);
+    ctx.restore();
+  } else if (shape === "star") {
+    for (var k = 0; k < 5; k++) {
+      var a1 = -Math.PI / 2 + k * 2 * Math.PI / 5;
+      var a2 = a1 + Math.PI / 5;
+      ctx.lineTo(x + r * 1.25 * Math.cos(a1), y + r * 1.25 * Math.sin(a1));
+      ctx.lineTo(x + r * 0.55 * Math.cos(a2), y + r * 0.55 * Math.sin(a2));
+    }
+    ctx.closePath();
+  } else {
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+  }
+  if (mode === "stroke") { ctx.stroke(); } else { ctx.fill(); }
+}
+
+var hovered = -1;
+var selected = -1;
+
+function draw() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = chrome("--surface-1");
+  ctx.fillRect(0, 0, w, h);
+
+  var mutedColor = chrome("--grid");
+  var i, p, g, x, y;
+
+  // pass 1: dimmed points (isolation or search active)
+  var dimming = isolated !== null || matches !== null;
+  if (dimming) {
+    ctx.fillStyle = mutedColor;
+    for (i = 0; i < DATA.points.length; i++) {
+      p = DATA.points[i];
+      if (visible(i, p)) continue;
+      x = sx(p[1]); y = sy(p[2]);
+      if (x < -8 || x > w + 8 || y < -8 || y > h + 8) continue;
+      drawMark(x, y, 2, "circle", "fill");
+    }
+  }
+
+  // pass 2: live points, grouped by graph so fill color sets once
+  for (g = 0; g < DATA.graphs.length; g++) {
+    ctx.fillStyle = seriesColor(g);
+    var shape = SHAPES[g % SHAPES.length];
+    for (i = 0; i < DATA.points.length; i++) {
+      p = DATA.points[i];
+      if (p[0] !== g) continue;
+      if (dimming && !visible(i, p)) continue;
+      x = sx(p[1]); y = sy(p[2]);
+      if (x < -8 || x > w + 8 || y < -8 || y > h + 8) continue;
+      drawMark(x, y, 3.2, shape, "fill");
+    }
+  }
+
+  // centroid overlay: rings, stroked in the series color
+  if (centroidToggle.checked) {
+    ctx.lineWidth = 1.6;
+    for (g = 0; g < DATA.graphs.length; g++) {
+      if (isolated !== null && isolated !== g) continue;
+      ctx.strokeStyle = seriesColor(g);
+      for (i = 0; i < DATA.centroids.length; i++) {
+        var c = DATA.centroids[i];
+        if (c[0] !== g) continue;
+        x = sx(c[1]); y = sy(c[2]);
+        if (x < -10 || x > w + 10 || y < -10 || y > h + 10) continue;
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // selected mark keeps a persistent series-colored ring
+  if (selected >= 0) {
+    p = DATA.points[selected];
+    x = sx(p[1]); y = sy(p[2]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = seriesColor(p[0]);
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.fillStyle = seriesColor(p[0]);
+    drawMark(x, y, 4.4, SHAPES[p[0] % SHAPES.length], "fill");
+  }
+
+  // hovered mark gets a surface ring + repaint on top
+  if (hovered >= 0 && hovered !== selected) {
+    p = DATA.points[hovered];
+    x = sx(p[1]); y = sy(p[2]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = chrome("--surface-1");
+    drawMark(x, y, 5, SHAPES[p[0] % SHAPES.length], "stroke");
+    ctx.fillStyle = seriesColor(p[0]);
+    drawMark(x, y, 4.4, SHAPES[p[0] % SHAPES.length], "fill");
+  }
+}
+
+function visible(index, p) {
+  if (isolated !== null && p[0] !== isolated) return false;
+  if (matches !== null && !matches.has(index)) return false;
+  return true;
+}
+
+// --- legend ----------------------------------------------------------
+function shapeSvg(g) {
+  var ns = "http://www.w3.org/2000/svg";
+  var svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  var el;
+  var shape = SHAPES[g % SHAPES.length];
+  if (shape === "square") {
+    el = document.createElementNS(ns, "rect");
+    el.setAttribute("x", "3"); el.setAttribute("y", "3");
+    el.setAttribute("width", "10"); el.setAttribute("height", "10");
+  } else if (shape === "triangle") {
+    el = document.createElementNS(ns, "polygon");
+    el.setAttribute("points", "8,2 14,13 2,13");
+  } else if (shape === "tri-down") {
+    el = document.createElementNS(ns, "polygon");
+    el.setAttribute("points", "8,14 14,3 2,3");
+  } else if (shape === "diamond") {
+    el = document.createElementNS(ns, "polygon");
+    el.setAttribute("points", "8,1 15,8 8,15 1,8");
+  } else if (shape === "cross") {
+    el = document.createElementNS(ns, "path");
+    el.setAttribute("d", "M6 2h4v4h4v4h-4v4H6v-4H2V6h4z");
+  } else if (shape === "x") {
+    el = document.createElementNS(ns, "path");
+    el.setAttribute("transform", "rotate(45 8 8)");
+    el.setAttribute("d", "M6 2h4v4h4v4h-4v4H6v-4H2V6h4z");
+  } else if (shape === "star") {
+    el = document.createElementNS(ns, "polygon");
+    el.setAttribute("points",
+      "8,1 9.9,5.7 15,6 11,9.3 12.3,14.5 8,11.6 3.7,14.5 5,9.3 1,6 6.1,5.7");
+  } else {
+    el = document.createElementNS(ns, "circle");
+    el.setAttribute("cx", "8"); el.setAttribute("cy", "8");
+    el.setAttribute("r", "5.5");
+  }
+  el.setAttribute("fill", seriesColor(g));
+  svg.appendChild(el);
+  return svg;
+}
+
+function buildLegend() {
+  legendBox.textContent = "";
+  DATA.graphs.forEach(function (graph, g) {
+    var row = document.createElement("button");
+    row.className = "legend-row";
+    row.setAttribute("aria-pressed", String(isolated === g));
+    if (isolated !== null && isolated !== g) row.classList.add("dimmed");
+    row.appendChild(shapeSvg(g));
+
+    var name = document.createElement("span");
+    name.className = "legend-name";
+    name.textContent = graph.name;
+    row.appendChild(name);
+
+    var count = document.createElement("span");
+    count.className = "legend-count";
+    count.textContent = graph.sampled === graph.total
+      ? String(graph.total)
+      : graph.sampled + " / " + graph.total;
+    row.appendChild(count);
+
+    row.addEventListener("click", function () {
+      isolated = isolated === g ? null : g;
+      buildLegend();
+      draw();
+    });
+    legendBox.appendChild(row);
+  });
+}
+
+// --- interaction -----------------------------------------------------
+var panning = false, panStart = null;
+
+canvas.addEventListener("pointerdown", function (e) {
+  panning = true;
+  canvas.classList.add("panning");
+  panStart = { px: e.clientX, py: e.clientY,
+               x0: view.x0, x1: view.x1, y0: view.y0, y1: view.y1 };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointerup", function (e) {
+  panning = false;
+  canvas.classList.remove("panning");
+  canvas.releasePointerCapture(e.pointerId);
+  // a press that barely moved is a click: select the hovered point
+  var moved = Math.abs(e.clientX - panStart.px) +
+    Math.abs(e.clientY - panStart.py);
+  if (moved < 5) {
+    selected = hovered;
+    if (selected >= 0) { showDetails(selected); } else { hideDetails(); }
+    draw();
+  }
+});
+canvas.addEventListener("pointermove", function (e) {
+  var rect = canvas.getBoundingClientRect();
+  var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  if (panning) {
+    var dx = (e.clientX - panStart.px) / canvas.clientWidth *
+      (panStart.x1 - panStart.x0);
+    var dy = (e.clientY - panStart.py) / canvas.clientHeight *
+      (panStart.y1 - panStart.y0);
+    view.x0 = panStart.x0 - dx; view.x1 = panStart.x1 - dx;
+    view.y0 = panStart.y0 + dy; view.y1 = panStart.y1 + dy;
+    hideTooltip();
+    draw();
+    return;
+  }
+  // nearest live point within 24px
+  var best = -1, bestD = 24 * 24;
+  for (var i = 0; i < DATA.points.length; i++) {
+    var p = DATA.points[i];
+    if ((isolated !== null || matches !== null) && !visible(i, p)) continue;
+    var ddx = sx(p[1]) - mx, ddy = sy(p[2]) - my;
+    var d = ddx * ddx + ddy * ddy;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  if (best !== hovered) {
+    hovered = best;
+    draw();
+  }
+  if (best >= 0) {
+    showTooltip(best, mx, my);
+  } else {
+    hideTooltip();
+  }
+});
+canvas.addEventListener("pointerleave", function () {
+  if (hovered !== -1) { hovered = -1; draw(); }
+  hideTooltip();
+});
+
+canvas.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var rect = canvas.getBoundingClientRect();
+  var mx = (e.clientX - rect.left) / canvas.clientWidth;
+  var my = 1 - (e.clientY - rect.top) / canvas.clientHeight;
+  var factor = Math.exp(e.deltaY * 0.0015);
+  var cx = view.x0 + mx * (view.x1 - view.x0);
+  var cy = view.y0 + my * (view.y1 - view.y0);
+  view.x0 = cx + (view.x0 - cx) * factor;
+  view.x1 = cx + (view.x1 - cx) * factor;
+  view.y0 = cy + (view.y0 - cy) * factor;
+  view.y1 = cy + (view.y1 - cy) * factor;
+  hideTooltip();
+  draw();
+}, { passive: false });
+
+function showTooltip(index, mx, my) {
+  var p = DATA.points[index];
+  tooltip.querySelector(".tip-label").textContent = p[3] || "(no label)";
+  tooltip.querySelector(".tip-name").textContent =
+    DATA.graphs[p[0]].name;
+  tooltip.querySelector(".tip-key").style.background = seriesColor(p[0]);
+  tooltip.style.display = "block";
+  var wrap = canvas.parentElement.getBoundingClientRect();
+  var tx = mx + 14, ty = my + 14;
+  var tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  if (tx + tw > wrap.width - 8) tx = mx - tw - 14;
+  if (ty + th > wrap.height - 8) ty = my - th - 14;
+  tooltip.style.left = tx + "px";
+  tooltip.style.top = ty + "px";
+}
+function hideTooltip() { tooltip.style.display = "none"; }
+
+var details = document.getElementById("details");
+
+function showDetails(index) {
+  var p = DATA.points[index];
+  details.querySelector(".d-label").textContent = p[3] || "(no label)";
+  details.querySelector(".d-name").textContent = DATA.graphs[p[0]].name;
+  details.querySelector(".d-key").style.background = seriesColor(p[0]);
+  var iriBox = details.querySelector(".d-iri");
+  iriBox.textContent = "";
+  if (p[5]) {
+    if (/^https?:\/\//.test(p[5])) {
+      var link = document.createElement("a");
+      link.href = p[5];
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = p[5];
+      iriBox.appendChild(link);
+    } else {
+      iriBox.textContent = p[5];
+    }
+  }
+  details.querySelector(".d-text").textContent = p[4] || "";
+  details.classList.add("open");
+}
+function hideDetails() {
+  selected = -1;
+  details.classList.remove("open");
+}
+document.getElementById("d-close").addEventListener("click", function () {
+  hideDetails();
+  draw();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && selected >= 0) {
+    hideDetails();
+    draw();
+  }
+});
+
+searchBox.addEventListener("input", function () {
+  var q = searchBox.value.trim().toLowerCase();
+  if (!q) {
+    matches = null;
+    searchHint.textContent = "";
+  } else {
+    matches = new Set();
+    for (var i = 0; i < DATA.points.length; i++) {
+      var label = DATA.points[i][3];
+      if (label && label.toLowerCase().indexOf(q) !== -1) matches.add(i);
+    }
+    searchHint.textContent = matches.size + " match" +
+      (matches.size === 1 ? "" : "es");
+  }
+  draw();
+});
+
+centroidToggle.addEventListener("change", draw);
+document.getElementById("reset").addEventListener("click", function () {
+  resetView();
+  draw();
+});
+
+window.addEventListener("resize", draw);
+var darkWatch = window.matchMedia("(prefers-color-scheme: dark)");
+if (darkWatch.addEventListener) {
+  darkWatch.addEventListener("change", function () {
+    buildLegend();  // swatch colors are read at build time
+    if (selected >= 0) showDetails(selected);
+    draw();
+  });
+}
+
+buildLegend();
+draw();
+</script>
+</body>
+</html>

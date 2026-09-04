@@ -42,6 +42,14 @@ class GraphReader:
     def root_iris(self, root_type: str) -> Iterable[str]:
         raise NotImplementedError
 
+    def root_count(self, root_type: str) -> int | None:
+        """Fast subject count for `? rdf:type <root_type>`, or None if unknown.
+
+        Used by the textify progress bar to set tqdm's `total`. A None result
+        means the caller should show a countless spinner instead.
+        """
+        return None
+
     def predicate_objects(
         self, subject: Any
     ) -> Iterable[tuple[GraphTerm, GraphTerm]]:
@@ -135,6 +143,16 @@ class HDTGraphReader(GraphReader):
         for subject, _, _ in triples:
             if not subject.startswith("_:"):
                 yield subject
+
+    def root_count(self, root_type: str) -> int | None:
+        # HDT's cardinality is exact for two-fixed-position patterns (the
+        # docstring's warning about overcounting applies to predicate-only
+        # `? P ?` patterns, which take a different index path). The subject
+        # count matches the triple count here because rdf:type is unique per
+        # (subject, class) pair. Blank-node subjects, filtered in root_iris,
+        # are rare enough to leave the count as an upper bound.
+        _, count = self.document.search_triples("", str(RDF.type), root_type)
+        return count
 
     def predicate_objects(
         self, subject: Any

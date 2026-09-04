@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
-from fastembed import TextEmbedding
+from sentence_transformers import SentenceTransformer
 
 if TYPE_CHECKING:
     from ..config.settings import AppSettings
@@ -20,47 +20,78 @@ class Embedder(Protocol):
     def embed_many(self, texts: list[str]) -> list[np.ndarray]: ...
 
 
-class FastEmbedEmbedder:
-    """Embedder backed by fastembed (onnxruntime, no torch).
+def _resolve_device(preferred: str) -> str:
+    """Pick a torch device: `auto` chooses CUDA > MPS > CPU."""
+    import torch
 
-    `threads` and `parallel` are the throughput knobs (see `AppSettings`);
-    both default to None, which leaves onnxruntime's own defaults in place --
-    the fastest configuration on an ordinary machine, because the model is
-    small enough that intra-op threading already uses every core.
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
-    GPU execution needs no setting here: fastembed's device selection
-    defaults to auto, so installing the `fastembed-gpu` package (which brings
-    onnxruntime-gpu) is enough to pick up a CUDA device.
+    if preferred == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("EMBED_DEVICE=cuda but torch reports no CUDA device")
+    if preferred == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("EMBED_DEVICE=mps but torch reports no MPS device")
+    return preferred
+
+
+class SentenceTransformerEmbedder:
+    """Embedder backed by sentence-transformers (torch).
+
+    Device selection is `auto` by default: CUDA if present, else MPS on Apple
+    Silicon, else CPU. Set `device` explicitly (`cpu`/`cuda`/`mps`) to pin.
+    Vectors are L2-normalized so cosine similarity is a plain dot product,
+    matching what the Qdrant collection is configured for.
+
+    `batch_size` is the encode-time batch handed to torch. `threads` only
+    applies on CPU (it caps torch's intra-op threading via
+    `torch.set_num_threads`); GPU devices ignore it.
     """
 
     def __init__(
         self,
         model_name: str,
+        *,
+        device: str = "auto",
+        batch_size: int = 256,
         threads: int | None = None,
-        parallel: int | None = None,
     ):
-        self._model = TextEmbedding(model_name=model_name, threads=threads)
+        resolved = _resolve_device(device)
+        if resolved == "cpu" and threads is not None:
+            import torch
+
+            torch.set_num_threads(threads)
+        self._model = SentenceTransformer(model_name, device=resolved)
+        self.device = resolved
+        self.batch_size = batch_size
         self.threads = threads
-        self.parallel = parallel
 
     def embed(self, text: str) -> np.ndarray:
         return self.embed_many([text])[0]
 
     def embed_many(self, texts: list[str]) -> list[np.ndarray]:
-        return [
-            np.asarray(vector, dtype=np.float32)
-            for vector in self._model.embed(texts, parallel=self.parallel)
-        ]
+        vectors = self._model.encode(
+            texts,
+            batch_size=self.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ).astype(np.float32, copy=False)
+        return [vectors[i] for i in range(vectors.shape[0])]
 
 
 def make_embedder(settings: "AppSettings") -> Embedder:
     """Construct the configured embedder.
 
-    The single place backend selection would branch if a non-fastembed model
-    is ever needed.
+    The single place backend selection would branch if a non-sentence-
+    transformers model is ever needed.
     """
-    return FastEmbedEmbedder(
+    return SentenceTransformerEmbedder(
         settings.model_name,
+        device=settings.embed_device,
+        batch_size=settings.embed_batch_size,
         threads=settings.embed_threads,
-        parallel=settings.embed_parallel,
     )

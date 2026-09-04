@@ -5,10 +5,21 @@ from typing import Annotated, NoReturn
 import typer
 from loguru import logger
 
+from ..ann.build import VECTOR_DTYPES, build_index
+from ..ann.eval import (
+    DEFAULT_EFS,
+    DEFAULT_KS,
+    DEFAULT_QUERIES,
+    DEFAULT_SEED,
+    evaluate_and_record,
+)
+from ..ann.sketch import MAX_K, build_sketch
 from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
+from .embed import embed_file
+from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
@@ -113,6 +124,17 @@ def textify(
         bool,
         typer.Option("--progress", help="Show a progress bar."),
     ] = False,
+    manifest: Annotated[
+        bool,
+        typer.Option(
+            "--manifest/--no-manifest",
+            help=(
+                "Also write a provenance manifest (<output stem>.meta.json) "
+                "beside the output, recording the graph, config, and run "
+                "bounds that produced it."
+            ),
+        ),
+    ] = False,
 ):
     if text and jsonl:
         raise typer.BadParameter("--text and --jsonl cannot be used together")
@@ -153,6 +175,19 @@ def textify(
         )
 
     typer.echo(f"Wrote {count} records to {output}")
+
+    if manifest:
+        data = build_manifest(
+            hdt_file,
+            config_toml,
+            config,
+            target=target,
+            limit=limit,
+            max_iris_per_record=max_iris_per_record,
+            record_count=count,
+        )
+        write_manifest(manifest_path(output), data)
+        typer.echo(f"Wrote manifest to {manifest_path(output)}")
 
 
 @app.command("sample-types")
@@ -267,6 +302,423 @@ def sample_targets_cmd(
         write_sample_targets_json(records, output)
 
     typer.echo(f"Wrote {len(records)} target samples to {output}")
+
+
+@app.command()
+def embed(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "JSONL embedding-record files to embed. Each file is one "
+                "graph, named by its stem (e.g. my-graph.jsonl -> my-graph)."
+            ),
+        ),
+    ],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            "-o",
+            help=(
+                "Directory for the output Parquet files (default: next to "
+                "each input)."
+            ),
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Number of records to embed at once.",
+        ),
+    ] = 256,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Maximum records to embed per input file.",
+        ),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a per-graph record progress bar.",
+        ),
+    ] = True,
+    graph: Annotated[
+        str | None,
+        typer.Option(
+            "--graph",
+            help=(
+                "Graph name recorded in the artifact metadata (default: "
+                "the input file's stem). Single input only."
+            ),
+        ),
+    ] = None,
+):
+    """Embed materialized JSONL records into self-described Parquet files.
+
+    Writes one `<graph>.parquet` per input: the record fields plus a `vector`
+    column, with the model identity in the file metadata. Downstream steps
+    (Qdrant upload, ANN index builds) consume this artifact instead of
+    re-embedding.
+    """
+    if graph is not None and len(inputs) > 1:
+        raise typer.BadParameter(
+            "--graph names one graph; it cannot apply to multiple inputs"
+        )
+
+    settings = load_settings()
+    # Deliberately not AppContext.from_env(): embedding needs no Qdrant
+    # connection, only the model.
+    embedder = make_embedder(settings)
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        output = (output_dir or path.parent) / f"{path.stem}.parquet"
+        try:
+            count = embed_file(
+                embedder,
+                path,
+                output,
+                model_name=settings.model_name,
+                batch_size=batch_size,
+                limit=limit,
+                progress_enabled=progress,
+                graph=graph,
+            )
+        except ValueError as e:
+            _fail(str(e))
+        typer.echo(f"Wrote {count} records to {output}")
+
+
+@app.command("build-index")
+def build_index_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to index. Each gets a usearch index "
+                "(<stem>.usearch) and a manifest (<stem>.usearch.meta.json) "
+                "written beside it."
+            ),
+        ),
+    ],
+    dtype: Annotated[
+        str,
+        typer.Option(
+            "--dtype",
+            help=(
+                "usearch storage type: f32 keeps full precision; f16 and i8 "
+                "quantize on ingest for a smaller index."
+            ),
+        ),
+    ] = "f32",
+    connectivity: Annotated[
+        int | None,
+        typer.Option(
+            "--connectivity",
+            min=2,
+            help="HNSW connectivity (m). usearch's default if unset.",
+        ),
+    ] = None,
+    expansion_add: Annotated[
+        int | None,
+        typer.Option(
+            "--expansion-add",
+            min=1,
+            help=(
+                "HNSW build-time beam width (ef_construction). usearch's "
+                "default if unset."
+            ),
+        ),
+    ] = None,
+    expansion_search: Annotated[
+        int | None,
+        typer.Option(
+            "--expansion-search",
+            min=1,
+            help=(
+                "Default query-time beam width (ef_search) stored in the "
+                "index; also overridable at query time. usearch's default "
+                "if unset."
+            ),
+        ),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a per-file vector progress bar.",
+        ),
+    ] = True,
+):
+    """Build a usearch ANN index beside each embed Parquet artifact.
+
+    The index keys are Parquet row ordinals, so a search hit resolves to its
+    record by reading that row of the Parquet file. The manifest records the
+    build parameters and the parent file's sha256; the index is rebuildable
+    from the Parquet at any time, with different parameters if needed.
+    """
+    if dtype not in VECTOR_DTYPES:
+        raise typer.BadParameter(
+            f"dtype must be one of {', '.join(VECTOR_DTYPES)}"
+        )
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            index_file, manifest_file, count = build_index(
+                path,
+                dtype=dtype,
+                connectivity=connectivity,
+                expansion_add=expansion_add,
+                expansion_search=expansion_search,
+                progress_enabled=progress,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+        typer.echo(f"Indexed {count} vectors into {index_file}")
+        typer.echo(f"Wrote manifest to {manifest_file}")
+
+
+@app.command("eval-index")
+def eval_index_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help="Embed Parquet files whose usearch indexes to evaluate.",
+        ),
+    ],
+    queries: Annotated[
+        int,
+        typer.Option(
+            "--queries",
+            min=1,
+            help="Stored vectors to sample as queries.",
+        ),
+    ] = DEFAULT_QUERIES,
+    k: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--k",
+            min=1,
+            help="Recall@k values to measure (repeatable).",
+        ),
+    ] = None,
+    ef: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--ef",
+            min=1,
+            help="expansion_search values to sweep (repeatable).",
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Query sampling seed."),
+    ] = DEFAULT_SEED,
+    write: Annotated[
+        bool,
+        typer.Option(
+            "--write/--no-write",
+            help="Record the evaluation in the index manifest.",
+        ),
+    ] = True,
+):
+    """Measure index recall against exact search, and record it.
+
+    Samples stored vectors as queries, computes exact ground truth by brute
+    force over the Parquet vectors, and reports recall@k across an
+    expansion_search sweep, plus per-query timings for both paths. The
+    result is written into the index manifest's `evaluation` block, so the
+    artifact itself says what "approximate" means for it.
+    """
+    ks = k or list(DEFAULT_KS)
+    efs = ef or list(DEFAULT_EFS)
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            block = evaluate_and_record(
+                path,
+                queries=queries,
+                ks=ks,
+                efs=efs,
+                seed=seed,
+                write=write,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+
+        flat_ms = block["flat"]["mean_query_ms"]
+        typer.echo(
+            f"{path}: {block['queries']} queries, flat scan {flat_ms} ms/query"
+        )
+        for step in block["sweep"]:
+            recalls = "  ".join(
+                f"recall@{k_}={value:.4f}"
+                for k_, value in step["recall"].items()
+            )
+            typer.echo(
+                f"  ef={step['expansion_search']:<5} {recalls}  "
+                f"{step['mean_query_ms']} ms/query"
+            )
+        if write:
+            typer.echo("Recorded evaluation in the index manifest")
+
+
+@app.command("build-sketch")
+def build_sketch_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to sketch. Each gets a routing sketch "
+                "(<stem>.sketch.parquet) written beside it."
+            ),
+        ),
+    ],
+    k: Annotated[
+        int | None,
+        typer.Option(
+            "--k",
+            min=1,
+            max=MAX_K,
+            help=(
+                "Number of centroids. Unset picks K automatically from "
+                "the radius-vs-K curve."
+            ),
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="k-means sampling seed."),
+    ] = 42,
+    radius_quantile: Annotated[
+        float,
+        typer.Option(
+            "--radius-quantile",
+            min=0.0,
+            max=1.0,
+            help=(
+                "Quantile radius recorded per cluster alongside the max, "
+                "used for yield ranking."
+            ),
+        ),
+    ] = 0.9,
+):
+    """Build a routing sketch beside each embed Parquet artifact.
+
+    The sketch answers "is this graph worth an ANN probe for this query"
+    from a few hundred KB: a certified no when the query provably clears
+    every cluster, and a yield ranking otherwise. Only comparable across
+    graphs sharing the parent's convention_id.
+    """
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+        try:
+            sketch_file, clusters, unsaturated = build_sketch(
+                path,
+                k=k,
+                seed=seed,
+                radius_quantile=radius_quantile,
+            )
+        except ValueError as e:
+            _fail(f"{path}: {e}")
+        suffix = " (unsaturated: every vector is its own centroid)"
+        typer.echo(
+            f"Sketched {clusters} centroids into {sketch_file}"
+            + (suffix if unsaturated else "")
+        )
+
+
+@app.command("plot-map")
+def plot_map_cmd(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Embed Parquet files to map. All must share one embedding "
+                "convention. A sketch beside a file (<stem>.sketch.parquet) "
+                "adds its centroids as an overlay."
+            ),
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Output HTML path."),
+    ],
+    sample: Annotated[
+        int,
+        typer.Option(
+            "--sample",
+            min=1,
+            help="Vectors sampled per graph (all rows if fewer).",
+        ),
+    ] = 2000,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Sampling and UMAP seed."),
+    ] = 42,
+    neighbors: Annotated[
+        int,
+        typer.Option(
+            "--neighbors",
+            min=2,
+            help="UMAP n_neighbors: higher favors global structure.",
+        ),
+    ] = 15,
+    min_dist: Annotated[
+        float,
+        typer.Option(
+            "--min-dist",
+            min=0.0,
+            help="UMAP min_dist: lower packs clusters tighter.",
+        ),
+    ] = 0.1,
+):
+    """Write an interactive UMAP map of one or more embed artifacts.
+
+    Samples vectors per graph, projects them (plus any sketch centroids)
+    to 2-D, and writes a self-contained HTML page: pan/zoom scatter,
+    per-graph legend with isolate, label search, centroid overlay.
+    Needs the `evaluation` dependency group (umap-learn).
+    """
+    try:
+        from ..ann.plot import build_map
+    except ImportError:
+        _fail(
+            "plot-map needs umap-learn, which is in the `evaluation` "
+            "dependency group of a source checkout (uv sync)."
+        )
+
+    for path in inputs:
+        if not path.exists():
+            _fail(f"Input file not found: {path}")
+    try:
+        result = build_map(
+            inputs,
+            output,
+            sample=sample,
+            seed=seed,
+            neighbors=neighbors,
+            min_dist=min_dist,
+        )
+    except ValueError as e:
+        _fail(str(e))
+    typer.echo(f"Wrote embedding map to {result}")
 
 
 @app.command()

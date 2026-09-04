@@ -149,8 +149,13 @@
     <footer class="app-footer">
       <div class="footer-inner">
         <a href="https://github.com/frink-okn/okn-embeddings" target="_blank" rel="noreferrer">Source code</a>
+        {% if backend_name == "qdrant" %}
         <span class="footer-sep">•</span>
         <a href="https://qdrant.tech/" target="_blank" rel="noreferrer">Powered by Qdrant</a>
+        {% else %}
+        <span class="footer-sep">•</span>
+        <span>Serving local sidecar artifacts</span>
+        {% endif %}
       </div>
     </footer>
 

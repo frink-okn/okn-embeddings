@@ -6,7 +6,10 @@ from qdrant_client.models import ScoredPoint
 
 from okn_embeddings.config.context import AppContext
 from okn_embeddings.config.settings import AppSettings
-from okn_embeddings.core.embedding import FastEmbedEmbedder, make_embedder
+from okn_embeddings.core.embedding import (
+    SentenceTransformerEmbedder,
+    make_embedder,
+)
 from okn_embeddings.core.results import summarize_point
 from okn_embeddings.indexing.upload import (
     chunks,
@@ -208,7 +211,7 @@ def test_reupload_is_idempotent(ctx: AppContext, tmp_path):
 # --- seam: single embed agrees with batch embed_many ---
 
 
-def test_embed_matches_embed_many(embedder: FastEmbedEmbedder):
+def test_embed_matches_embed_many(embedder: SentenceTransformerEmbedder):
     one = embedder.embed("diabetes")
     many = embedder.embed_many(["diabetes", "insulin"])
 
@@ -216,20 +219,28 @@ def test_embed_matches_embed_many(embedder: FastEmbedEmbedder):
     assert np.array_equal(one, many[0])
 
 
-# --- embedding throughput knobs ---
+# --- embedding backend knobs ---
 
 
-def test_make_embedder_passes_throughput_settings():
+def test_make_embedder_passes_backend_settings():
     embedder = make_embedder(
-        AppSettings(model_name=_MODEL, embed_threads=2, embed_parallel=3)
+        AppSettings(
+            model_name=_MODEL,
+            embed_device="cpu",
+            embed_batch_size=32,
+            embed_threads=2,
+        )
     )
 
+    assert embedder.device == "cpu"
+    assert embedder.batch_size == 32
     assert embedder.threads == 2
-    assert embedder.parallel == 3
 
 
-def test_throughput_settings_default_to_onnxruntime_defaults():
-    embedder = make_embedder(AppSettings(model_name=_MODEL))
+def test_backend_settings_default_to_auto_device():
+    embedder = make_embedder(
+        AppSettings(model_name=_MODEL, embed_device="cpu")
+    )
 
+    assert embedder.batch_size == 256
     assert embedder.threads is None
-    assert embedder.parallel is None
