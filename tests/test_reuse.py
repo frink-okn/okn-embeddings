@@ -8,8 +8,12 @@ import pytest
 from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 from okn_embeddings.indexing.embed import embed_file
 from okn_embeddings.indexing.embed_texts import embed_texts_file
-from okn_embeddings.indexing.probes import PROBE_TEXTS
-from okn_embeddings.indexing.reuse import ReuseRefused, ReuseSource
+from okn_embeddings.indexing.probes import PROBE_TEXTS, probe_vectors
+from okn_embeddings.indexing.reuse import (
+    ReuseFile,
+    ReuseRefused,
+    ReuseSource,
+)
 
 _MODEL = "test-model"
 
@@ -70,10 +74,16 @@ def _embed(embedder, path, output, **kwargs):
     return embed_texts_file(embedder, path, output, **kwargs)
 
 
-def _open(path, embedder, model_name=_MODEL, dim=None) -> ReuseSource:
+def _open_file(path, embedder, model_name=_MODEL, dim=None) -> ReuseFile:
     if dim is None:
         dim = len(embedder.embed("dimension probe"))
-    return ReuseSource.open(path, embedder, model_name=model_name, dim=dim)
+    return ReuseFile.open(
+        path, probe_vectors(embedder), model_name=model_name, dim=dim
+    )
+
+
+def _open(path, embedder, **kwargs) -> ReuseSource:
+    return ReuseSource([_open_file(path, embedder, **kwargs)])
 
 
 def _earlier(embedder, tmp_path, indices):
@@ -229,9 +239,9 @@ def test_digests_differing_only_in_trailing_zero_bytes_are_distinct(
     # exactly 32 bytes that must still be a bytewise comparison.
     a = b"a" + b"\0" * 31
     b = b"a" + b"\0" * 30 + b"\1"
-    keys = np.array(sorted([a, b]), dtype="S32")
+    keys = np.array([a, b], dtype="S32")
     vectors = np.arange(4, dtype=np.float32).reshape(2, 2)
-    source = ReuseSource(tmp_path, keys, np.array([0, 1]), [vectors], [0])
+    source = ReuseSource([ReuseFile(tmp_path, keys, [vectors], [0])])
 
     found = source.lookup([b, a, b"a" + b"\0" * 30 + b"\2"])
 
@@ -240,3 +250,47 @@ def test_digests_differing_only_in_trailing_zero_bytes_are_distinct(
         [0.0, 1.0],
         None,
     ]
+
+
+def test_several_files_merge_into_one_lookup(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    a = _earlier(embedder, first, range(0, 3))
+    b = _earlier(embedder, second, range(3, 6))
+    path = tmp_path / "texts.jsonl"
+    _write_texts(path, range(7))
+    counting = _Counting(embedder)
+
+    result = _embed(
+        counting,
+        path,
+        tmp_path / "out.parquet",
+        reuse=ReuseSource([_open_file(a, counting), _open_file(b, counting)]),
+    )
+
+    assert counting.embedded == [_text(6)]
+    assert result.reused == 6
+
+
+def test_where_files_share_a_digest_the_first_wins(tmp_path):
+    digest = b"d" * 32
+    one = ReuseFile(
+        tmp_path, np.array([digest], dtype="S32"), [np.ones((1, 2))], [0]
+    )
+    two = ReuseFile(
+        tmp_path, np.array([digest], dtype="S32"), [np.zeros((1, 2))], [0]
+    )
+
+    (found,) = ReuseSource([one, two]).lookup([digest])
+    (found_reversed,) = ReuseSource([two, one]).lookup([digest])
+
+    assert found is not None and found.tolist() == [1.0, 1.0]
+    assert found_reversed is not None and found_reversed.tolist() == [0, 0]
+
+
+def test_no_files_finds_nothing():
+    assert ReuseSource([]).lookup([b"d" * 32]) == [None]

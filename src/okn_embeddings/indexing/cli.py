@@ -24,8 +24,9 @@ from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
+from .probes import probe_vectors
 from .reader import load_graph
-from .reuse import ReuseRefused, ReuseSource
+from .reuse import ReuseFile, ReuseRefused, ReuseSource
 from .sample import (
     sample_targets,
     sample_types,
@@ -469,11 +470,15 @@ def embed_texts(
     source = None
     if reuse is not None:
         try:
-            source = ReuseSource.open(
-                reuse,
-                embedder,
-                model_name=settings.model_name,
-                dim=embedding_dim(embedder),
+            source = ReuseSource(
+                [
+                    ReuseFile.open(
+                        reuse,
+                        probe_vectors(embedder),
+                        model_name=settings.model_name,
+                        dim=embedding_dim(embedder),
+                    )
+                ]
             )
         except ReuseRefused as e:
             logger.warning("Not reusing vectors, embedding every text: {}", e)
@@ -494,7 +499,7 @@ def embed_texts(
     typer.echo(f"Wrote {result.count} texts to {output}")
     if source is not None:
         typer.echo(
-            f"Reused {result.reused} vectors from {source.path}; "
+            f"Reused {result.reused} vectors from {reuse}; "
             f"embedded {result.count - result.reused}"
         )
     if result.truncated:
