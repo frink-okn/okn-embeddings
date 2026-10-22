@@ -19,6 +19,7 @@ from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
 from .embed import embed_file
+from .embed_texts import embed_texts_file
 from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
@@ -398,6 +399,71 @@ def embed(
         except ValueError as e:
             _fail(str(e))
         typer.echo(f"Wrote {count} records to {output}")
+
+
+@app.command("embed-texts")
+def embed_texts(
+    texts: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "A `kgf verbalize --texts` stream: one JSON line per "
+                "distinct text, with its hex sha256 digest."
+            ),
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="The Parquet file to write."),
+    ],
+    graph: Annotated[
+        str,
+        typer.Option(
+            "--graph", help="Graph name recorded in the artifact metadata."
+        ),
+    ],
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Number of texts to embed at once.",
+        ),
+    ] = 256,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a text progress bar.",
+        ),
+    ] = True,
+):
+    """Embed a kgf texts stream into a digest-keyed Parquet file.
+
+    Writes one row per text -- `text_digest` and `vector`, in input order --
+    with the model identity in the file metadata. This is the vector store a
+    KGF bundle publishes; `kgf build` builds its index from it.
+    """
+    if not texts.exists():
+        _fail(f"Input file not found: {texts}")
+
+    settings = load_settings()
+    # As in `embed`: the model only, no Qdrant connection.
+    embedder = make_embedder(settings)
+
+    try:
+        count = embed_texts_file(
+            embedder,
+            texts,
+            output,
+            model_name=settings.model_name,
+            batch_size=batch_size,
+            graph=graph,
+            progress_enabled=progress,
+        )
+    except ValueError as e:
+        _fail(str(e))
+    typer.echo(f"Wrote {count} texts to {output}")
 
 
 @app.command("build-index")
