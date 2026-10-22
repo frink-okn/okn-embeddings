@@ -9,6 +9,7 @@ from okn_embeddings.core.embedding import SentenceTransformerEmbedder
 from okn_embeddings.indexing.embed import METADATA_PREFIX, convention_id
 from okn_embeddings.indexing.embed_texts import (
     TEXTS_FORMAT,
+    EmbedTextsResult,
     embed_texts_file,
 )
 
@@ -30,7 +31,7 @@ def _write_texts(path, n: int) -> list[str]:
     return texts
 
 
-def _embed(embedder, path, output, **kwargs) -> int:
+def _embed(embedder, path, output, **kwargs) -> EmbedTextsResult:
     kwargs.setdefault("model_name", _MODEL)
     kwargs.setdefault("batch_size", 2)
     kwargs.setdefault("graph", "g")
@@ -53,10 +54,11 @@ def test_rows_are_digest_and_vector_in_input_order(
     texts = _write_texts(path, 5)
     output = tmp_path / "embeddings.parquet"
 
-    count = _embed(embedder, path, output)
+    result = _embed(embedder, path, output)
     table = pq.read_table(output)
 
-    assert count == 5
+    assert result.count == 5
+    assert result.truncated == 0
     assert table.column_names == ["text_digest", "vector"]
     assert table.column("text_digest").to_pylist() == [
         hashlib.sha256(t.encode()).digest() for t in texts
@@ -97,6 +99,8 @@ def test_file_metadata_describes_the_vectors(
     assert meta["normalized"] == "true"
     assert meta["record_count"] == "4"
     assert meta["convention_id"] == convention_id(_MODEL, dim, "cosine", True)
+    assert meta["max_seq_length"] == str(embedder.max_seq_length)
+    assert meta["truncated_records"] == "0"
 
 
 def test_columns_are_uncompressed_and_vectors_map_zero_copy(
@@ -131,6 +135,22 @@ def test_small_flush_rows_still_writes_every_row(
     assert parquet.read().column("text_digest").to_pylist() == [
         hashlib.sha256(t.encode()).digest() for t in texts
     ]
+
+
+def test_texts_past_the_model_window_are_counted(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
+    # The model reads its first max_seq_length tokens and drops the rest
+    # without a word; the count is how a too-generous config shows itself.
+    long = "label: L\n" + "has value: something\n" * embedder.max_seq_length
+    path = tmp_path / "texts.jsonl"
+    path.write_text(_line("label: short") + _line(long), encoding="utf-8")
+    output = tmp_path / "embeddings.parquet"
+
+    result = _embed(embedder, path, output)
+
+    assert result.truncated == 1
+    assert _metadata(output)["truncated_records"] == "1"
 
 
 def test_a_digest_that_is_not_the_texts_is_refused(

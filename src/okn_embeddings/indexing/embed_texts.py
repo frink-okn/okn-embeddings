@@ -19,6 +19,7 @@ would hold every digest in memory); kgf, which wrote the stream, checks it.
 """
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,16 @@ def rows_to_table(
     )
 
 
+@dataclass(frozen=True)
+class EmbedTextsResult:
+    count: int
+    """Rows written: one per text."""
+    truncated: int
+    """Texts longer than the model reads, embedded from their first
+    `max_seq_length` tokens. Nonzero says the verbalizer config is too
+    generous for this model -- a `predicate_limit` or a template to cut."""
+
+
 def embed_texts_file(
     embedder: Embedder,
     path: Path,
@@ -111,8 +122,8 @@ def embed_texts_file(
     graph: str,
     flush_rows: int = FLUSH_ROWS,
     progress_enabled: bool = False,
-) -> int:
-    """Embed one texts stream into a Parquet file. Returns the row count."""
+) -> EmbedTextsResult:
+    """Embed one texts stream into a Parquet file."""
     dim = int(embedder.embed("dimension probe").shape[0])
     schema = texts_schema(dim)
 
@@ -127,6 +138,8 @@ def embed_texts_file(
     digests: list[bytes] = []
     vectors: list[np.ndarray] = []
     count = 0
+    truncated = 0
+    max_seq_length = embedder.max_seq_length
     max_norm_deviation = 0.0
 
     with pq.ParquetWriter(
@@ -148,7 +161,11 @@ def embed_texts_file(
         numbered = enumerate(iter_jsonl(path), start=1)
         for batch in chunks(numbered, batch_size):
             fields = [text_fields(path, n, record) for n, record in batch]
-            batch_vectors = embedder.embed_many([text for _, text in fields])
+            texts = [text for _, text in fields]
+            batch_vectors = embedder.embed_many(texts)
+            truncated += sum(
+                n > max_seq_length for n in embedder.token_counts(texts)
+            )
 
             norms = np.linalg.norm(np.stack(batch_vectors), axis=1)
             deviation = float(np.abs(norms - 1.0).max())
@@ -177,8 +194,10 @@ def embed_texts_file(
                 METADATA_PREFIX + "convention_id": convention_id(
                     model_name, dim, "cosine", normalized
                 ),
+                METADATA_PREFIX + "max_seq_length": str(max_seq_length),
+                METADATA_PREFIX + "truncated_records": str(truncated),
             }
         )
 
     progress.close()
-    return count
+    return EmbedTextsResult(count=count, truncated=truncated)

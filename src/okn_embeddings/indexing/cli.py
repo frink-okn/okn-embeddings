@@ -452,7 +452,7 @@ def embed_texts(
     embedder = make_embedder(settings)
 
     try:
-        count = embed_texts_file(
+        result = embed_texts_file(
             embedder,
             texts,
             output,
@@ -463,7 +463,16 @@ def embed_texts(
         )
     except ValueError as e:
         _fail(str(e))
-    typer.echo(f"Wrote {count} texts to {output}")
+    typer.echo(f"Wrote {result.count} texts to {output}")
+    if result.truncated:
+        logger.warning(
+            "{} of {} texts exceed the model's {} tokens and were embedded "
+            "from their beginning only; tighten predicate_limit or the "
+            "templates in the verbalizer config",
+            result.truncated,
+            result.count,
+            embedder.max_seq_length,
+        )
 
 
 @app.command("build-index")
