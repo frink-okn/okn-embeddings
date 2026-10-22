@@ -21,7 +21,7 @@ would hold every digest in memory); kgf, which wrote the stream, checks it.
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
@@ -37,6 +37,10 @@ from .embed import (
 )
 from .probes import encode_probes, probe_vectors
 from .records import chunks, count_jsonl, iter_jsonl
+
+if TYPE_CHECKING:
+    # reuse imports this module's layout constants.
+    from .reuse import ReuseSource
 
 # The layout `embed` writes is format 1: one row per grouped record, with its
 # IRIs, label, and text. This is a different layout, not a revision of that
@@ -111,6 +115,12 @@ class EmbedTextsResult:
     """Texts longer than the model reads, embedded from their first
     `max_seq_length` tokens. Nonzero says the verbalizer config is too
     generous for this model -- a `predicate_limit` or a template to cut."""
+    reused: int = 0
+    """Rows whose vector came from the reuse source, not the model."""
+
+
+def embedding_dim(embedder: Embedder) -> int:
+    return int(embedder.embed("dimension probe").shape[0])
 
 
 def embed_texts_file(
@@ -121,11 +131,18 @@ def embed_texts_file(
     model_name: str,
     batch_size: int,
     graph: str,
+    reuse: "ReuseSource | None" = None,
     flush_rows: int = FLUSH_ROWS,
     progress_enabled: bool = False,
 ) -> EmbedTextsResult:
-    """Embed one texts stream into a Parquet file."""
-    dim = int(embedder.embed("dimension probe").shape[0])
+    """Embed one texts stream into a Parquet file.
+
+    With `reuse`, a text whose digest the source holds takes its vector
+    from there instead of the model. The output does not otherwise depend
+    on it: the source has passed the probe check, so a reused vector is the
+    one the model would produce, to within re-batching noise.
+    """
+    dim = embedding_dim(embedder)
     schema = texts_schema(dim)
 
     progress = tqdm(
@@ -140,8 +157,16 @@ def embed_texts_file(
     vectors: list[np.ndarray] = []
     count = 0
     truncated = 0
+    reused = 0
     max_seq_length = embedder.max_seq_length
     max_norm_deviation = 0.0
+
+    # Texts read but not yet written, in input order, each with its reused
+    # vector or None. Texts needing the model accumulate until there is a
+    # full batch of them, so heavy reuse does not shrink every model call to
+    # the few misses in one read.
+    pending: list[tuple[bytes, str, np.ndarray | None]] = []
+    misses = 0
 
     with pq.ParquetWriter(
         output,
@@ -157,29 +182,54 @@ def embed_texts_file(
                 digests = []
                 vectors = []
 
+        def drain() -> None:
+            nonlocal misses, max_norm_deviation
+            if not pending:
+                return
+            to_embed = [text for _, text, vector in pending if vector is None]
+            fresh = iter(embedder.embed_many(to_embed) if to_embed else [])
+            filled = [
+                next(fresh) if vector is None else vector
+                for _, _, vector in pending
+            ]
+
+            norms = np.linalg.norm(np.stack(filled), axis=1)
+            deviation = float(np.abs(norms - 1.0).max())
+            max_norm_deviation = max(max_norm_deviation, deviation)
+
+            digests.extend(digest for digest, _, _ in pending)
+            vectors.extend(filled)
+            progress.update(len(pending))
+            pending.clear()
+            misses = 0
+            if len(digests) >= flush_rows:
+                flush()
+
         # Numbered by position in the stream, which is the row the text will
         # occupy (plus one); iter_jsonl's own errors carry line numbers.
         numbered = enumerate(iter_jsonl(path), start=1)
         for batch in chunks(numbered, batch_size):
             fields = [text_fields(path, n, record) for n, record in batch]
             texts = [text for _, text in fields]
-            batch_vectors = embedder.embed_many(texts)
             truncated += sum(
                 n > max_seq_length for n in embedder.token_counts(texts)
             )
-
-            norms = np.linalg.norm(np.stack(batch_vectors), axis=1)
-            deviation = float(np.abs(norms - 1.0).max())
-            max_norm_deviation = max(max_norm_deviation, deviation)
-
-            digests.extend(digest for digest, _ in fields)
-            vectors.extend(batch_vectors)
+            found = (
+                reuse.lookup([digest for digest, _ in fields])
+                if reuse is not None
+                else [None] * len(fields)
+            )
+            for (digest, text), vector in zip(fields, found, strict=True):
+                pending.append((digest, text, vector))
+            hits = sum(vector is not None for vector in found)
+            reused += hits
+            misses += len(fields) - hits
             count += len(fields)
-            progress.update(len(fields))
 
-            if len(digests) >= flush_rows:
-                flush()
+            if misses >= batch_size or len(pending) >= flush_rows:
+                drain()
 
+        drain()
         flush()
 
         normalized = max_norm_deviation <= NORMALIZED_TOLERANCE
@@ -200,8 +250,9 @@ def embed_texts_file(
                     probe_vectors(embedder)
                 ),
                 METADATA_PREFIX + "truncated_records": str(truncated),
+                METADATA_PREFIX + "reused_records": str(reused),
             }
         )
 
     progress.close()
-    return EmbedTextsResult(count=count, truncated=truncated)
+    return EmbedTextsResult(count=count, truncated=truncated, reused=reused)

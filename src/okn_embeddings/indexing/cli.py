@@ -19,12 +19,13 @@ from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
 from .embed import embed_file
-from .embed_texts import embed_texts_file
+from .embed_texts import embed_texts_file, embedding_dim
 from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
 from .reader import load_graph
+from .reuse import ReuseRefused, ReuseSource
 from .sample import (
     sample_targets,
     sample_types,
@@ -437,6 +438,18 @@ def embed_texts(
             help="Show a text progress bar.",
         ),
     ] = True,
+    reuse: Annotated[
+        Path | None,
+        typer.Option(
+            "--reuse",
+            help=(
+                "An earlier embed-texts file: texts whose digest it holds "
+                "take its vector instead of being embedded again. Used only "
+                "if its probes show the same vector space; otherwise every "
+                "text is embedded, with a warning saying why."
+            ),
+        ),
+    ] = None,
 ):
     """Embed a kgf texts stream into a digest-keyed Parquet file.
 
@@ -446,10 +459,24 @@ def embed_texts(
     """
     if not texts.exists():
         _fail(f"Input file not found: {texts}")
+    if reuse is not None and not reuse.exists():
+        _fail(f"Reuse file not found: {reuse}")
 
     settings = load_settings()
     # As in `embed`: the model only, no Qdrant connection.
     embedder = make_embedder(settings)
+
+    source = None
+    if reuse is not None:
+        try:
+            source = ReuseSource.open(
+                reuse,
+                embedder,
+                model_name=settings.model_name,
+                dim=embedding_dim(embedder),
+            )
+        except ReuseRefused as e:
+            logger.warning("Not reusing vectors, embedding every text: {}", e)
 
     try:
         result = embed_texts_file(
@@ -459,11 +486,17 @@ def embed_texts(
             model_name=settings.model_name,
             batch_size=batch_size,
             graph=graph,
+            reuse=source,
             progress_enabled=progress,
         )
     except ValueError as e:
         _fail(str(e))
     typer.echo(f"Wrote {result.count} texts to {output}")
+    if source is not None:
+        typer.echo(
+            f"Reused {result.reused} vectors from {source.path}; "
+            f"embedded {result.count - result.reused}"
+        )
     if result.truncated:
         logger.warning(
             "{} of {} texts exceed the model's {} tokens and were embedded "
