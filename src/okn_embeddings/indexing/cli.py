@@ -18,12 +18,16 @@ from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
+from .checkpoint import Checkpoint
 from .embed import embed_file
+from .embed_texts import embed_texts_file, embedding_dim
 from .manifest import build_manifest, manifest_path, write_manifest
 from .models import MaterializationConfiguration
 from .output import write_json, write_jsonl, write_text
 from .parallel import materialize_records_to_path
+from .probes import probe_vectors
 from .reader import load_graph
+from .reuse import ReuseFile, ReuseRefused, ReuseSource
 from .sample import (
     sample_targets,
     sample_types,
@@ -398,6 +402,145 @@ def embed(
         except ValueError as e:
             _fail(str(e))
         typer.echo(f"Wrote {count} records to {output}")
+
+
+@app.command("embed-texts")
+def embed_texts(
+    texts: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "A `kgf verbalize --texts` stream: one JSON line per "
+                "distinct text, with its hex sha256 digest."
+            ),
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="The Parquet file to write."),
+    ],
+    graph: Annotated[
+        str,
+        typer.Option(
+            "--graph", help="Graph name recorded in the artifact metadata."
+        ),
+    ],
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Number of texts to embed at once.",
+        ),
+    ] = 256,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Show a text progress bar.",
+        ),
+    ] = True,
+    reuse: Annotated[
+        Path | None,
+        typer.Option(
+            "--reuse",
+            help=(
+                "An earlier embed-texts file: texts whose digest it holds "
+                "take its vector instead of being embedded again. Used only "
+                "if its probes show the same vector space; otherwise every "
+                "text is embedded, with a warning saying why."
+            ),
+        ),
+    ] = None,
+    checkpoint_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--checkpoint",
+            help=(
+                "A directory for checkpoint parts. Freshly embedded vectors "
+                "are also written there as the run goes; a rerun with the "
+                "same directory reuses them, so a crashed run resumes. Its "
+                "parts are removed when a run succeeds."
+            ),
+        ),
+    ] = None,
+):
+    """Embed a kgf texts stream into a digest-keyed Parquet file.
+
+    Writes one row per text -- `text_digest` and `vector`, in input order --
+    with the model identity in the file metadata. This is the vector store a
+    KGF bundle publishes; `kgf build` builds its index from it.
+    """
+    if not texts.exists():
+        _fail(f"Input file not found: {texts}")
+    if reuse is not None and not reuse.exists():
+        _fail(f"Reuse file not found: {reuse}")
+
+    settings = load_settings()
+    # As in `embed`: the model only, no Qdrant connection.
+    embedder = make_embedder(settings)
+
+    checkpoint = (
+        Checkpoint.open(checkpoint_dir) if checkpoint_dir is not None else None
+    )
+    candidates = [
+        *([reuse] if reuse is not None else []),
+        *(checkpoint.existing if checkpoint is not None else []),
+    ]
+    used: list[ReuseFile] = []
+    if candidates:
+        probes = probe_vectors(embedder)
+        dim = embedding_dim(embedder)
+        for path in candidates:
+            try:
+                used.append(
+                    ReuseFile.open(
+                        path, probes, model_name=settings.model_name, dim=dim
+                    )
+                )
+            except ReuseRefused as e:
+                logger.warning("Not reusing {}: {}", path.name, e)
+    if checkpoint is not None and checkpoint.existing:
+        resumed = sum(f.path in checkpoint.existing for f in used)
+        typer.echo(
+            f"Resuming: {resumed} of {len(checkpoint.existing)} checkpoint "
+            f"parts in {checkpoint.directory} reusable"
+        )
+    source = ReuseSource(used) if used else None
+
+    try:
+        result = embed_texts_file(
+            embedder,
+            texts,
+            output,
+            model_name=settings.model_name,
+            batch_size=batch_size,
+            graph=graph,
+            reuse=source,
+            checkpoint=checkpoint,
+            progress_enabled=progress,
+        )
+    except ValueError as e:
+        _fail(str(e))
+    typer.echo(f"Wrote {result.count} texts to {output}")
+    if source is not None:
+        typer.echo(
+            f"Reused {result.reused} vectors; "
+            f"embedded {result.count - result.reused}"
+        )
+    if checkpoint is not None:
+        checkpoint.remove(
+            [f.path for f in used if f.path in checkpoint.existing]
+        )
+    if result.truncated:
+        logger.warning(
+            "{} of {} texts exceed the model's {} tokens and were embedded "
+            "from their beginning only; tighten predicate_limit or the "
+            "templates in the verbalizer config",
+            result.truncated,
+            result.count,
+            embedder.max_seq_length,
+        )
 
 
 @app.command("build-index")

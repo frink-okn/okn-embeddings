@@ -7,7 +7,7 @@ that never touch Qdrant do not have to import the upload module.
 
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 def iter_jsonl(
@@ -43,9 +43,9 @@ def count_jsonl(path: Path, limit: int | None = None) -> int:
     return count
 
 
-def chunks(records: Iterable[dict[str, Any]], size: int):
+def chunks[T](records: Iterable[T], size: int) -> Iterator[list[T]]:
     """Group an iterable of records into lists of at most `size`."""
-    batch: list[dict[str, Any]] = []
+    batch: list[T] = []
     for record in records:
         batch.append(record)
         if len(batch) == size:

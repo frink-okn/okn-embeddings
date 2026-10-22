@@ -19,6 +19,16 @@ class Embedder(Protocol):
 
     def embed_many(self, texts: list[str]) -> list[np.ndarray]: ...
 
+    @property
+    def max_seq_length(self) -> int:
+        """Tokens the model reads; past this a text is cut, silently."""
+        ...
+
+    def token_counts(self, texts: list[str]) -> list[int]:
+        """Each text's length in the model's tokens, special tokens included,
+        before any truncation -- comparable to `max_seq_length`."""
+        ...
+
 
 def _resolve_device(preferred: str) -> str:
     """Pick a torch device: `auto` chooses CUDA > MPS > CPU."""
@@ -81,6 +91,18 @@ class SentenceTransformerEmbedder:
             show_progress_bar=False,
         ).astype(np.float32, copy=False)
         return [vectors[i] for i in range(vectors.shape[0])]
+
+    @property
+    def max_seq_length(self) -> int:
+        return int(self._model.max_seq_length)
+
+    def token_counts(self, texts: list[str]) -> list[int]:
+        # `verbose=False` keeps the tokenizer from warning about lengths over
+        # the model's limit, which is exactly what is being measured.
+        encoded = self._model.tokenizer(
+            texts, add_special_tokens=True, truncation=False, verbose=False
+        )
+        return [len(ids) for ids in encoded["input_ids"]]
 
 
 def make_embedder(settings: "AppSettings") -> Embedder:
