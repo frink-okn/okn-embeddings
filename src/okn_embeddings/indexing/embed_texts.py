@@ -168,8 +168,13 @@ def embed_texts_file(
     pending: list[tuple[bytes, str, np.ndarray | None]] = []
     misses = 0
 
+    # Written beside the output and renamed onto it once whole: a Parquet
+    # file is unreadable until its footer is written, so a run that dies
+    # must not leave one where a reader would take it for the result.
+    partial = output.with_name(output.name + ".partial")
+
     with pq.ParquetWriter(
-        output,
+        partial,
         schema,
         compression=PARQUET_COMPRESSION,
         use_dictionary=False,
@@ -254,5 +259,6 @@ def embed_texts_file(
             }
         )
 
+    partial.replace(output)
     progress.close()
     return EmbedTextsResult(count=count, truncated=truncated, reused=reused)

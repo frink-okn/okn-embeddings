@@ -185,3 +185,23 @@ def test_malformed_lines_are_refused(
 
     with pytest.raises(ValueError, match=message):
         _embed(embedder, path, tmp_path / "embeddings.parquet")
+
+
+def test_a_run_that_fails_leaves_the_last_output_whole(
+    embedder: SentenceTransformerEmbedder, tmp_path
+):
+    output = tmp_path / "embeddings.parquet"
+    good = tmp_path / "good.jsonl"
+    _write_texts(good, 3)
+    _embed(embedder, good, output)
+    before = output.read_bytes()
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(
+        "".join(_line(_text(i)) for i in range(4)) + '{"text": "t"}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing its digest"):
+        _embed(embedder, bad, output, flush_rows=2)
+
+    assert output.read_bytes() == before
