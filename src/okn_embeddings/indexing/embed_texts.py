@@ -35,6 +35,7 @@ from .embed import (
     NORMALIZED_TOLERANCE,
     convention_id,
 )
+from .probes import encode_probes, probe_vectors
 from .records import chunks, count_jsonl, iter_jsonl
 
 # The layout `embed` writes is format 1: one row per grouped record, with its
@@ -195,6 +196,9 @@ def embed_texts_file(
                     model_name, dim, "cosine", normalized
                 ),
                 METADATA_PREFIX + "max_seq_length": str(max_seq_length),
+                METADATA_PREFIX + "probes": encode_probes(
+                    probe_vectors(embedder)
+                ),
                 METADATA_PREFIX + "truncated_records": str(truncated),
             }
         )
