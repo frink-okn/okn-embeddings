@@ -29,6 +29,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from ..core.embedding import Embedder
+from .checkpoint import CHECKPOINT_ROWS, Checkpoint
 from .embed import (
     FLUSH_ROWS,
     METADATA_PREFIX,
@@ -132,7 +133,9 @@ def embed_texts_file(
     batch_size: int,
     graph: str,
     reuse: "ReuseSource | None" = None,
+    checkpoint: Checkpoint | None = None,
     flush_rows: int = FLUSH_ROWS,
+    checkpoint_rows: int = CHECKPOINT_ROWS,
     progress_enabled: bool = False,
 ) -> EmbedTextsResult:
     """Embed one texts stream into a Parquet file.
@@ -141,6 +144,9 @@ def embed_texts_file(
     from there instead of the model. The output does not otherwise depend
     on it: the source has passed the probe check, so a reused vector is the
     one the model would produce, to within re-batching noise.
+
+    With `checkpoint`, every `checkpoint_rows` freshly embedded vectors are
+    also written as a part there, for a rerun to reuse if this one dies.
     """
     dim = embedding_dim(embedder)
     schema = texts_schema(dim)
@@ -160,6 +166,22 @@ def embed_texts_file(
     reused = 0
     max_seq_length = embedder.max_seq_length
     max_norm_deviation = 0.0
+
+    # What every file this run writes says about its vector space: enough
+    # for ReuseFile to accept or refuse it. Parts carry these alone.
+    space = {
+        METADATA_PREFIX + "format": str(TEXTS_FORMAT),
+        METADATA_PREFIX + "graph": graph,
+        METADATA_PREFIX + "model": model_name,
+        METADATA_PREFIX + "dim": str(dim),
+        METADATA_PREFIX + "metric": "cosine",
+        METADATA_PREFIX + "max_seq_length": str(max_seq_length),
+        METADATA_PREFIX + "probes": encode_probes(probe_vectors(embedder)),
+    }
+
+    # Freshly embedded rows not yet in a checkpoint part.
+    fresh_digests: list[bytes] = []
+    fresh_vectors: list[np.ndarray] = []
 
     # Texts read but not yet written, in input order, each with its reused
     # vector or None. Texts needing the model accumulate until there is a
@@ -187,16 +209,37 @@ def embed_texts_file(
                 digests = []
                 vectors = []
 
+        def checkpoint_part() -> None:
+            nonlocal fresh_digests, fresh_vectors
+            if checkpoint is not None and fresh_digests:
+                checkpoint.write(
+                    rows_to_table(schema, fresh_digests, fresh_vectors),
+                    {
+                        **space,
+                        METADATA_PREFIX + "record_count": str(
+                            len(fresh_digests)
+                        ),
+                    },
+                )
+            fresh_digests = []
+            fresh_vectors = []
+
         def drain() -> None:
             nonlocal misses, max_norm_deviation
             if not pending:
                 return
             to_embed = [text for _, text, vector in pending if vector is None]
-            fresh = iter(embedder.embed_many(to_embed) if to_embed else [])
+            embedded = embedder.embed_many(to_embed) if to_embed else []
+            fresh = iter(embedded)
             filled = [
                 next(fresh) if vector is None else vector
                 for _, _, vector in pending
             ]
+            if checkpoint is not None:
+                fresh_digests.extend(
+                    digest for digest, _, vector in pending if vector is None
+                )
+                fresh_vectors.extend(embedded)
 
             norms = np.linalg.norm(np.stack(filled), axis=1)
             deviation = float(np.abs(norms - 1.0).max())
@@ -209,6 +252,8 @@ def embed_texts_file(
             misses = 0
             if len(digests) >= flush_rows:
                 flush()
+            if len(fresh_digests) >= checkpoint_rows:
+                checkpoint_part()
 
         # Numbered by position in the stream, which is the row the text will
         # occupy (plus one); iter_jsonl's own errors carry line numbers.
@@ -240,19 +285,11 @@ def embed_texts_file(
         normalized = max_norm_deviation <= NORMALIZED_TOLERANCE
         writer.add_key_value_metadata(
             {
-                METADATA_PREFIX + "format": str(TEXTS_FORMAT),
-                METADATA_PREFIX + "graph": graph,
-                METADATA_PREFIX + "model": model_name,
-                METADATA_PREFIX + "dim": str(dim),
-                METADATA_PREFIX + "metric": "cosine",
+                **space,
                 METADATA_PREFIX + "normalized": str(normalized).lower(),
                 METADATA_PREFIX + "record_count": str(count),
                 METADATA_PREFIX + "convention_id": convention_id(
                     model_name, dim, "cosine", normalized
-                ),
-                METADATA_PREFIX + "max_seq_length": str(max_seq_length),
-                METADATA_PREFIX + "probes": encode_probes(
-                    probe_vectors(embedder)
                 ),
                 METADATA_PREFIX + "truncated_records": str(truncated),
                 METADATA_PREFIX + "reused_records": str(reused),

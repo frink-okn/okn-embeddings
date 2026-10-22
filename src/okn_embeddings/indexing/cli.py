@@ -18,6 +18,7 @@ from ..config import AppContext
 from ..config.settings import load_settings
 from ..core.embedding import make_embedder
 from ..core.errors import friendly_error
+from .checkpoint import Checkpoint
 from .embed import embed_file
 from .embed_texts import embed_texts_file, embedding_dim
 from .manifest import build_manifest, manifest_path, write_manifest
@@ -451,6 +452,18 @@ def embed_texts(
             ),
         ),
     ] = None,
+    checkpoint_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--checkpoint",
+            help=(
+                "A directory for checkpoint parts. Freshly embedded vectors "
+                "are also written there as the run goes; a rerun with the "
+                "same directory reuses them, so a crashed run resumes. Its "
+                "parts are removed when a run succeeds."
+            ),
+        ),
+    ] = None,
 ):
     """Embed a kgf texts stream into a digest-keyed Parquet file.
 
@@ -467,21 +480,33 @@ def embed_texts(
     # As in `embed`: the model only, no Qdrant connection.
     embedder = make_embedder(settings)
 
-    source = None
-    if reuse is not None:
-        try:
-            source = ReuseSource(
-                [
+    checkpoint = (
+        Checkpoint.open(checkpoint_dir) if checkpoint_dir is not None else None
+    )
+    candidates = [
+        *([reuse] if reuse is not None else []),
+        *(checkpoint.existing if checkpoint is not None else []),
+    ]
+    used: list[ReuseFile] = []
+    if candidates:
+        probes = probe_vectors(embedder)
+        dim = embedding_dim(embedder)
+        for path in candidates:
+            try:
+                used.append(
                     ReuseFile.open(
-                        reuse,
-                        probe_vectors(embedder),
-                        model_name=settings.model_name,
-                        dim=embedding_dim(embedder),
+                        path, probes, model_name=settings.model_name, dim=dim
                     )
-                ]
-            )
-        except ReuseRefused as e:
-            logger.warning("Not reusing vectors, embedding every text: {}", e)
+                )
+            except ReuseRefused as e:
+                logger.warning("Not reusing {}: {}", path.name, e)
+    if checkpoint is not None and checkpoint.existing:
+        resumed = sum(f.path in checkpoint.existing for f in used)
+        typer.echo(
+            f"Resuming: {resumed} of {len(checkpoint.existing)} checkpoint "
+            f"parts in {checkpoint.directory} reusable"
+        )
+    source = ReuseSource(used) if used else None
 
     try:
         result = embed_texts_file(
@@ -492,6 +517,7 @@ def embed_texts(
             batch_size=batch_size,
             graph=graph,
             reuse=source,
+            checkpoint=checkpoint,
             progress_enabled=progress,
         )
     except ValueError as e:
@@ -499,8 +525,12 @@ def embed_texts(
     typer.echo(f"Wrote {result.count} texts to {output}")
     if source is not None:
         typer.echo(
-            f"Reused {result.reused} vectors from {reuse}; "
+            f"Reused {result.reused} vectors; "
             f"embedded {result.count - result.reused}"
+        )
+    if checkpoint is not None:
+        checkpoint.remove(
+            [f.path for f in used if f.path in checkpoint.existing]
         )
     if result.truncated:
         logger.warning(
