@@ -26,7 +26,7 @@ import pyarrow.parquet as pq
 from ..core.embedding import Embedder
 from .embed import METADATA_PREFIX
 from .embed_texts import DIGEST_BYTES, TEXTS_FORMAT
-from .probes import PROBE_TOLERANCE, probe_deviation
+from .probes import PROBE_TOLERANCE, probe_deviation, probe_vectors
 
 
 class ReuseRefused(Exception):
@@ -87,7 +87,7 @@ class ReuseSource:
         probes = meta.get("probes")
         if probes is None:
             refuse("carries no probes to check the vector space by")
-        deviation = probe_deviation(probes, embedder)
+        deviation = probe_deviation(probes, probe_vectors(embedder))
         if deviation is None:
             refuse("its probes are not the current probe set")
         if deviation > PROBE_TOLERANCE:

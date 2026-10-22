@@ -44,13 +44,15 @@ def test_the_same_embedder_reproduces_its_probes(
 ):
     encoded = encode_probes(probe_vectors(embedder))
 
-    assert probe_deviation(encoded, embedder) == 0.0
+    assert probe_deviation(encoded, probe_vectors(embedder)) == 0.0
 
 
 def test_a_shifted_embedder_is_caught(embedder: SentenceTransformerEmbedder):
     encoded = encode_probes(probe_vectors(embedder))
 
-    deviation = probe_deviation(encoded, _Shifted(embedder, 1e-3))
+    deviation = probe_deviation(
+        encoded, probe_vectors(_Shifted(embedder, 1e-3))
+    )
 
     assert deviation is not None
     assert deviation > PROBE_TOLERANCE
@@ -62,7 +64,7 @@ def test_other_probe_texts_cannot_be_compared(
     data = json.loads(encode_probes(probe_vectors(embedder)))
     data["texts"][0] = "something else"
 
-    assert probe_deviation(json.dumps(data), embedder) is None
+    assert probe_deviation(json.dumps(data), probe_vectors(embedder)) is None
 
 
 def test_embed_texts_stamps_its_probes(
@@ -80,4 +82,4 @@ def test_embed_texts_stamps_its_probes(
     raw = pq.read_metadata(output).metadata
     encoded = raw[(METADATA_PREFIX + "probes").encode()].decode()
 
-    assert probe_deviation(encoded, embedder) == 0.0
+    assert probe_deviation(encoded, probe_vectors(embedder)) == 0.0

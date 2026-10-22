@@ -82,8 +82,12 @@ def decode_probes(encoded: str) -> tuple[list[str], np.ndarray]:
     return list(data["texts"]), np.asarray(data["vectors"], dtype=np.float32)
 
 
-def probe_deviation(encoded: str, embedder: Embedder) -> float | None:
-    """How far `embedder` lands from the recorded probes.
+def probe_deviation(encoded: str, current: np.ndarray) -> float | None:
+    """How far `current` -- `probe_vectors` of the embedder in hand -- lands
+    from the recorded probes.
+
+    Taking the vectors rather than the embedder lets a caller checking many
+    files run the model on the probes once.
 
     The largest per-component difference, or None when the two cannot be
     compared at all (other texts, other width) -- which is a mismatch, not
@@ -92,7 +96,6 @@ def probe_deviation(encoded: str, embedder: Embedder) -> float | None:
     texts, recorded = decode_probes(encoded)
     if tuple(texts) != PROBE_TEXTS:
         return None
-    current = probe_vectors(embedder)
     if current.shape != recorded.shape:
         return None
     return float(np.abs(current - recorded).max())
